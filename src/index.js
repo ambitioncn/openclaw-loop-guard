@@ -5,6 +5,7 @@ import {
   createHandoffRequest,
   createGuardedToolResult,
   createLoopGuardState,
+  createStatusMessage,
   createStateRecorder,
   defaultStatePath,
   findHandoffEvent,
@@ -390,8 +391,13 @@ export default definePluginEntry({
           }
         }
         const snapshot = state.snapshot();
+        const cfg = refreshConfig();
         return {
-          text: `Loop Guard: ${config.enabled ? "enabled" : "disabled"}; tracked failures=${snapshot.length}; soft=${config.softThreshold}; hard=${config.hardThreshold}.`
+          text: createStatusMessage({
+            config: cfg,
+            snapshot,
+            events: readRecentEvents(cfg.statePath || defaultStatePath())
+          })
         };
       }
     });

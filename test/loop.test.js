@@ -9,6 +9,7 @@ import {
   createGuardedToolResult,
   createLoopGuardState,
   createParamsPreview,
+  createStatusMessage,
   findHandoffEvent,
   normalizeApprovedToolAllowList,
   normalizeConfig,
@@ -348,6 +349,34 @@ test("finds latest and selected handoff events", () => {
   assert.equal(findHandoffEvent(events, "latest").paramsHash, "bbb");
   assert.equal(findHandoffEvent(events, "old").paramsHash, "aaa");
   assert.equal(findHandoffEvent(events, "missing"), undefined);
+});
+
+test("status message includes latest handoff and approval command", () => {
+  const message = createStatusMessage({
+    config: {
+      enabled: true,
+      handoffEnabled: true,
+      executorModel: "openai/gpt-5.5",
+      approvedHandoffToolsAllow: ["read", "exec"],
+      approvedHandoffWriteRoots: ["/repo"]
+    },
+    snapshot: [{ key: "exec:a:b" }],
+    events: [
+      {
+        action: "handoff-started",
+        handoffSessionKey: "agent:main:subagent:loop-guard-source-a-b",
+        handoffRunId: "run-2",
+        trigger: "warn",
+        toolName: "exec",
+        paramsHash: "a",
+        errorHash: "b"
+      }
+    ]
+  });
+  assert.match(message, /tracked failures=1/);
+  assert.match(message, /Handoff: enabled; executor=openai\/gpt-5\.5/);
+  assert.match(message, /Latest handoff:/);
+  assert.match(message, /\/loop-guard approve latest tools=read,exec,bash roots=\/repo/);
 });
 
 test("builds approved handoff request for the same session with approved tools", () => {

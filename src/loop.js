@@ -330,6 +330,38 @@ export function createApprovalPrompt({ handoff, config, entry }) {
     .join("\n");
 }
 
+export function createStatusMessage({ config, snapshot = [], events = [] }) {
+  const cfg = normalizeConfig(config);
+  const latestHandoff = findHandoffEvent(events, "latest");
+  const lines = [
+    `Loop Guard: ${cfg.enabled ? "enabled" : "disabled"}; tracked failures=${snapshot.length}; soft=${cfg.softThreshold}; hard=${cfg.hardThreshold}.`,
+    `Handoff: ${cfg.handoffEnabled ? "enabled" : "disabled"}; executor=${cfg.executorModel || "unset"}; runtime=${cfg.executorRuntime || "unset"}.`
+  ];
+  if (!latestHandoff) {
+    lines.push("Latest handoff: none.");
+    return lines.join("\n");
+  }
+  lines.push(
+    "",
+    "Latest handoff:",
+    `- session: ${latestHandoff.handoffSessionKey || "unknown"}`,
+    `- run: ${latestHandoff.handoffRunId || "unknown"}`,
+    `- trigger: ${latestHandoff.trigger || "unknown"}`,
+    `- tool: ${latestHandoff.toolName || "unknown"}`,
+    `- failure: params=${latestHandoff.paramsHash || "unknown"} error=${latestHandoff.errorHash || "unknown"}`,
+    "",
+    createApprovalPrompt({
+      handoff: {
+        sessionKey: latestHandoff.handoffSessionKey,
+        runId: latestHandoff.handoffRunId
+      },
+      config: cfg,
+      entry: latestHandoff
+    })
+  );
+  return lines.filter(Boolean).join("\n");
+}
+
 export function shouldStartHandoff(trigger, entry, config) {
   const cfg = normalizeConfig(config);
   if (!cfg.enabled || !cfg.handoffEnabled || !cfg.executorModel || !entry) return false;
