@@ -332,11 +332,12 @@ export default definePluginEntry({
           const approval = parseApproveArgs(rawArgs, cfg.approvedHandoffToolsAllow);
           const event = findHandoffEvent(
             readRecentEvents(cfg.statePath || defaultStatePath()),
-            approval.selector
+            approval.selector,
+            { requirePending: true }
           );
           if (!event) {
             return {
-              text: `Loop Guard approval failed: no matching handoff-started event found for ${approval.selector}.`
+              text: `Loop Guard approval failed: no pending handoff-started event found for ${approval.selector}. Run /loop-guard to inspect the latest handoff state.`
             };
           }
           try {

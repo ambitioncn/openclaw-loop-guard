@@ -333,6 +333,7 @@ export function createApprovalPrompt({ handoff, config, entry }) {
 export function createStatusMessage({ config, snapshot = [], events = [] }) {
   const cfg = normalizeConfig(config);
   const latestHandoff = findHandoffEvent(events, "latest");
+  const lifecycle = latestHandoff ? getHandoffLifecycle(events, latestHandoff) : undefined;
   const lines = [
     `Loop Guard: ${cfg.enabled ? "enabled" : "disabled"}; tracked failures=${snapshot.length}; soft=${cfg.softThreshold}; hard=${cfg.hardThreshold}.`,
     `Handoff: ${cfg.handoffEnabled ? "enabled" : "disabled"}; executor=${cfg.executorModel || "unset"}; runtime=${cfg.executorRuntime || "unset"}.`
@@ -348,17 +349,25 @@ export function createStatusMessage({ config, snapshot = [], events = [] }) {
     `- run: ${latestHandoff.handoffRunId || "unknown"}`,
     `- trigger: ${latestHandoff.trigger || "unknown"}`,
     `- tool: ${latestHandoff.toolName || "unknown"}`,
+    `- status: ${lifecycle?.status || "unknown"}`,
     `- failure: params=${latestHandoff.paramsHash || "unknown"} error=${latestHandoff.errorHash || "unknown"}`,
-    "",
-    createApprovalPrompt({
-      handoff: {
-        sessionKey: latestHandoff.handoffSessionKey,
-        runId: latestHandoff.handoffRunId
-      },
-      config: cfg,
-      entry: latestHandoff
-    })
+    lifecycle?.status === "pending"
+      ? ""
+      : `Latest handoff is not pending; /loop-guard approve latest will not re-approve it.`
   );
+  if (lifecycle?.status === "pending") {
+    lines.push(
+      "",
+      createApprovalPrompt({
+        handoff: {
+          sessionKey: latestHandoff.handoffSessionKey,
+          runId: latestHandoff.handoffRunId
+        },
+        config: cfg,
+        entry: latestHandoff
+      })
+    );
+  }
   return lines.filter(Boolean).join("\n");
 }
 
@@ -496,11 +505,14 @@ export function readRecentEvents(statePath, limit = 200) {
     .filter(Boolean);
 }
 
-export function findHandoffEvent(events, selector = "latest") {
+export function findHandoffEvent(events, selector = "latest", options = {}) {
   const normalizedSelector = String(selector || "latest").trim();
   const candidates = [...events].reverse().filter((event) => event?.action === "handoff-started");
-  if (normalizedSelector === "latest") return candidates[0];
-  return candidates.find((event) => {
+  const filtered = options.requirePending
+    ? candidates.filter((event) => getHandoffLifecycle(events, event).status === "pending")
+    : candidates;
+  if (normalizedSelector === "latest") return filtered[0];
+  return filtered.find((event) => {
     const fields = [
       event.handoffSessionKey,
       event.handoffRunId,
@@ -512,6 +524,38 @@ export function findHandoffEvent(events, selector = "latest") {
     ];
     return fields.some((field) => String(field || "").includes(normalizedSelector));
   });
+}
+
+export function getHandoffLifecycle(events, handoffEvent) {
+  if (!handoffEvent) return { status: "unknown" };
+  const startIndex = events.indexOf(handoffEvent);
+  const related = events
+    .slice(startIndex >= 0 ? startIndex + 1 : 0)
+    .filter((event) => isRelatedHandoffEvent(event, handoffEvent));
+  const latest = related[related.length - 1];
+  if (!latest) return { status: "pending" };
+  const statusByAction = {
+    "handoff-approved-started": "approved",
+    "handoff-approved-failed": "approval_failed",
+    "handoff-completed": "completed",
+    "handoff-failed": "failed"
+  };
+  return {
+    status: statusByAction[latest.action] || "pending",
+    latestAction: latest.action,
+    latestAt: latest.at
+  };
+}
+
+function isRelatedHandoffEvent(event, handoffEvent) {
+  if (!event || event === handoffEvent) return false;
+  const sessionKey = handoffEvent.handoffSessionKey;
+  const runId = handoffEvent.handoffRunId;
+  return (
+    (sessionKey && event.handoffSessionKey === sessionKey) ||
+    (runId && event.sourceHandoffRunId === runId) ||
+    (runId && event.handoffRunId === runId)
+  );
 }
 
 export function createApprovedHandoffRequest({

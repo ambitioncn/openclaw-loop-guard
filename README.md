@@ -108,9 +108,9 @@ If OpenClaw rejects the per-run model override despite that policy, Loop Guard f
 /loop-guard approve latest tools=read,exec,bash roots=/path/to/repo confirm=safe
 ```
 
-`/loop-guard` shows plugin status, the most recent `handoff-started` audit event, and the approval command for that handoff when one exists.
+`/loop-guard` shows plugin status, the most recent `handoff-started` audit event, its lifecycle state, and the approval command when that handoff is still pending.
 
-`approve` looks up the most recent `handoff-started` audit event and continues that same executor session with approved tools. A selector can replace `latest`; it matches the handoff session key, run id, source run id, tool name, params hash, or error hash.
+`approve` looks up the most recent pending `handoff-started` audit event and continues that same executor session with approved tools. A selector can replace `latest`; it matches the handoff session key, run id, source run id, tool name, params hash, or error hash. Already approved, failed, or completed handoffs are skipped so stale tasks are not re-approved accidentally.
 
 For Codex executors, Loop Guard expands approved `exec` to include `bash`, because Codex exposes shell execution as `bash`.
 

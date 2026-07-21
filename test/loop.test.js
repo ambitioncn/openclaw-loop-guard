@@ -11,6 +11,7 @@ import {
   createParamsPreview,
   createStatusMessage,
   findHandoffEvent,
+  getHandoffLifecycle,
   normalizeApprovedToolAllowList,
   normalizeConfig,
   parseApproveArgs,
@@ -351,6 +352,38 @@ test("finds latest and selected handoff events", () => {
   assert.equal(findHandoffEvent(events, "missing"), undefined);
 });
 
+test("handoff lifecycle tracks approved and completed states", () => {
+  const first = {
+    action: "handoff-started",
+    handoffSessionKey: "agent:main:subagent:first",
+    handoffRunId: "run-1",
+    paramsHash: "aaa"
+  };
+  const second = {
+    action: "handoff-started",
+    handoffSessionKey: "agent:main:subagent:second",
+    handoffRunId: "run-2",
+    paramsHash: "bbb"
+  };
+  const events = [
+    first,
+    {
+      action: "handoff-approved-started",
+      handoffSessionKey: "agent:main:subagent:first",
+      sourceHandoffRunId: "run-1"
+    },
+    {
+      action: "handoff-completed",
+      handoffSessionKey: "agent:main:subagent:first"
+    },
+    second
+  ];
+  assert.equal(getHandoffLifecycle(events, first).status, "completed");
+  assert.equal(getHandoffLifecycle(events, second).status, "pending");
+  assert.equal(findHandoffEvent(events, "latest", { requirePending: true }), second);
+  assert.equal(findHandoffEvent(events, "first", { requirePending: true }), undefined);
+});
+
 test("status message includes latest handoff and approval command", () => {
   const message = createStatusMessage({
     config: {
@@ -377,6 +410,35 @@ test("status message includes latest handoff and approval command", () => {
   assert.match(message, /Handoff: enabled; executor=openai\/gpt-5\.5/);
   assert.match(message, /Latest handoff:/);
   assert.match(message, /\/loop-guard approve latest tools=read,exec,bash roots=\/repo/);
+});
+
+test("status message does not suggest approval for completed latest handoff", () => {
+  const message = createStatusMessage({
+    config: {
+      enabled: true,
+      handoffEnabled: true,
+      executorModel: "openai/gpt-5.5",
+      approvedHandoffToolsAllow: ["read", "exec"]
+    },
+    events: [
+      {
+        action: "handoff-started",
+        handoffSessionKey: "agent:main:subagent:loop-guard-source-a-b",
+        handoffRunId: "run-2",
+        trigger: "warn",
+        toolName: "exec",
+        paramsHash: "a",
+        errorHash: "b"
+      },
+      {
+        action: "handoff-completed",
+        handoffSessionKey: "agent:main:subagent:loop-guard-source-a-b"
+      }
+    ]
+  });
+  assert.match(message, /status: completed/);
+  assert.match(message, /will not re-approve/);
+  assert.doesNotMatch(message, /Human approval needed/);
 });
 
 test("builds approved handoff request for the same session with approved tools", () => {
