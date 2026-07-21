@@ -462,6 +462,57 @@ export function createHandoffRequest({ trigger, entry, config, context = {} }) {
   };
 }
 
+export function createCompletionE2eRequest({ config, context = {}, marker = "" }) {
+  const cfg = normalizeConfig(config);
+  const safeMarker =
+    String(marker || `loop-guard-e2e-${new Date().toISOString()}`)
+      .trim()
+      .replace(/[^a-zA-Z0-9_.:-]/g, "-")
+      .slice(0, 120) || "loop-guard-e2e";
+  const entry = createFailureSignature({
+    toolName: "loop-guard-e2e",
+    params: {
+      marker: safeMarker,
+      command: "/loop-guard e2e completion",
+      sourceSession: context.sessionKey || context.sessionId || "unknown"
+    },
+    error:
+      "Controlled slash-command completion delivery acceptance test. No real tool failure occurred.",
+    paramsPreviewMaxChars: cfg.paramsPreviewMaxChars
+  });
+  const request = createHandoffRequest({
+    trigger: "slash-e2e",
+    entry: {
+      ...entry,
+      count: 1,
+      errorSummary:
+        "Controlled slash-command completion delivery acceptance test. No real tool failure occurred."
+    },
+    config: {
+      ...cfg,
+      handoffToolsAllow: []
+    },
+    context
+  });
+  return {
+    ...request,
+    marker: safeMarker,
+    e2eEntry: entry,
+    message: [
+      request.message,
+      "",
+      "Slash command E2E acceptance instructions:",
+      `- This is a controlled Loop Guard completion-delivery test with marker ${safeMarker}.`,
+      `- requesterSessionKey: ${request.requesterSessionKey || "missing"}`,
+      `- expectsCompletionMessage: ${request.expectsCompletionMessage === true ? "true" : "false"}`,
+      "- Do not call tools.",
+      "- Do not ask follow-up questions.",
+      `- Return exactly one concise completion report that starts with: LOOP_GUARD_E2E_COMPLETION_OK ${safeMarker}`,
+      "- Include whether requesterSessionKey and expectsCompletionMessage were present in the request text."
+    ].join("\n")
+  };
+}
+
 export function createSubagentRunParams(request, overrides = {}) {
   return {
     sessionKey: request.sessionKey,

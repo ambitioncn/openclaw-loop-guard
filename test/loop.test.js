@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   buildApprovedHandoffScopeRules,
   createApprovedHandoffRequest,
+  createCompletionE2eRequest,
   createApprovalPrompt,
   createHandoffRequest,
   createFailureSignature,
@@ -286,6 +287,31 @@ test("passes completion delivery fields to subagent runs", () => {
   assert.equal(params.expectsCompletionMessage, true);
   assert.equal(params.deliver, false);
   assert.equal(params.lightContext, true);
+});
+
+test("builds slash-command completion e2e handoff request", () => {
+  const request = createCompletionE2eRequest({
+    config: {
+      handoffEnabled: true,
+      executorModel: "openai/gpt-5.5",
+      handoffToolsAllow: ["read"]
+    },
+    context: {
+      agentId: "main",
+      sessionKey: "agent:main:feishu:direct:user"
+    },
+    marker: "loop-guard-e2e-test"
+  });
+  assert.equal(request.marker, "loop-guard-e2e-test");
+  assert.equal(request.requesterSessionKey, "agent:main:feishu:direct:user");
+  assert.equal(request.expectsCompletionMessage, true);
+  assert.deepEqual(request.toolsAllow, []);
+  assert.match(request.idempotencyKey, /loop-guard:slash-e2e:/);
+  assert.match(request.message, /LOOP_GUARD_E2E_COMPLETION_OK loop-guard-e2e-test/);
+  assert.match(request.message, /requesterSessionKey: agent:main:feishu:direct:user/);
+  assert.match(request.message, /expectsCompletionMessage: true/);
+  assert.match(request.message, /Do not call tools/);
+  assert.equal(request.e2eEntry.toolName, "loop-guard-e2e");
 });
 
 test("builds handoff prompt for explicitly allowed tools", () => {

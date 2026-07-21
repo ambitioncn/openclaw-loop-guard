@@ -13,6 +13,7 @@ It is intended for local-model deployments where a capable reasoning model is us
 - Stores lightweight audit events outside the session transcript.
 - Provides a `/loop-guard` command for status and reset.
 - Can start a configured executor subagent when repeated failures or hung calls indicate that the driver is stuck.
+- Provides `/loop-guard e2e completion` for a clean slash-command acceptance test of handoff completion delivery.
 
 ## MVP Policy
 
@@ -49,7 +50,7 @@ Volatile ids such as `toolCallId`, `runId`, `turnId`, and timestamps are ignored
 From a checkout:
 
 ```bash
-openclaw plugins install ./openclaw-loop-guard --link --force
+openclaw plugins install ./openclaw-loop-guard --link
 ```
 
 Enable it explicitly in `openclaw.json` if your OpenClaw install requires plugin entries for trusted surfaces:
@@ -105,6 +106,8 @@ If OpenClaw rejects the per-run model override despite that policy, Loop Guard f
 ```text
 /loop-guard
 /loop-guard reset
+/loop-guard e2e completion
+/loop-guard e2e completion wait=30s
 /loop-guard approve latest
 /loop-guard approve latest tools=read,exec,bash,apply_patch
 /loop-guard approve latest tools=read,exec,bash,apply_patch roots=/path/to/repo
@@ -112,6 +115,8 @@ If OpenClaw rejects the per-run model override despite that policy, Loop Guard f
 ```
 
 `/loop-guard` shows plugin status, the most recent `handoff-started` audit event, its lifecycle state, and the approval command when that handoff is still pending.
+
+`e2e completion` starts a controlled no-tool executor handoff from the current slash-command session and requests completion delivery back to that same source session. The command response includes a unique marker, requester session, executor session, and executor run. The executor completion report should start with `LOOP_GUARD_E2E_COMPLETION_OK <marker>`. Add `wait=30s` or another bounded duration to wait for terminal run status before the command returns.
 
 `approve` looks up the most recent pending `handoff-started` audit event and continues that same executor session with approved tools. A selector can replace `latest`; it matches the handoff session key, run id, source run id, tool name, params hash, or error hash. Already approved, failed, completed, or expired handoffs are skipped so stale tasks are not re-approved accidentally.
 

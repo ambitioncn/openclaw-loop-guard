@@ -1,6 +1,7 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import {
   createApprovedHandoffRequest,
+  createCompletionE2eRequest,
   createApprovalPrompt,
   createHandoffRequest,
   createGuardedToolResult,
@@ -23,6 +24,30 @@ function resolveRuntimeConfig(api) {
   const current = api.runtime?.config?.current?.();
   const live = current?.plugins?.entries?.["loop-guard"]?.config;
   return normalizeConfig(live ?? api.pluginConfig ?? {});
+}
+
+function resolveAgentId(ctx) {
+  const direct = String(ctx.agentId || "").trim();
+  if (direct) return direct;
+  const sessionKey = String(ctx.sessionKey || "").trim();
+  const match = sessionKey.match(/^agent:([^:]+)/);
+  return match?.[1] || "main";
+}
+
+function parseWaitMs(rawArgs) {
+  const token = String(rawArgs || "")
+    .split(/\s+/)
+    .find((part) => /^wait=/i.test(part));
+  if (!token) return 0;
+  const value = token.replace(/^wait=/i, "").trim();
+  const match = value.match(/^(\d+)(ms|s|m)?$/i);
+  if (!match) return 0;
+  const amount = Number.parseInt(match[1], 10);
+  const unit = (match[2] || "ms").toLowerCase();
+  if (!Number.isFinite(amount) || amount <= 0) return 0;
+  if (unit === "m") return amount * 60 * 1000;
+  if (unit === "s") return amount * 1000;
+  return amount;
 }
 
 export default definePluginEntry({
@@ -333,6 +358,94 @@ export default definePluginEntry({
         if (action === "reset" || action === "clear") {
           state.clear();
           return { text: "Loop Guard state cleared." };
+        }
+        if (action === "e2e" || action === "selftest") {
+          const [, target = "completion"] = rawArgs.split(/\s+/);
+          if (target.toLowerCase() !== "completion") {
+            return {
+              text: "Loop Guard E2E usage: /loop-guard e2e completion"
+            };
+          }
+          const cfg = refreshConfig();
+          if (!cfg.executorModel) {
+            return {
+              text: "Loop Guard E2E failed: executorModel is not configured."
+            };
+          }
+          if (!api.runtime?.subagent?.run) {
+            return { text: "Loop Guard E2E failed: subagent runtime is unavailable." };
+          }
+          const marker = `loop-guard-e2e-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+          const context = {
+            runtime: "slash-command",
+            agentId: resolveAgentId(ctx),
+            sessionId: ctx.sessionId,
+            sessionKey: ctx.sessionKey,
+            runId: `slash-command:${marker}`
+          };
+          try {
+            const request = createCompletionE2eRequest({
+              config: cfg,
+              context,
+              marker
+            });
+            const result = await api.runtime.subagent.run(createSubagentRunParams(request));
+            recorder.record({
+              action: "handoff-started",
+              trigger: "slash-e2e",
+              runtime: context.runtime,
+              agentId: context.agentId,
+              sessionId: context.sessionId,
+              sessionKey: context.sessionKey,
+              runId: context.runId,
+              handoffRunId: result?.runId,
+              handoffSessionKey: request.sessionKey,
+              executorModel: cfg.executorModel,
+              executorRuntime: cfg.executorRuntime,
+              toolName: "loop-guard-e2e",
+              paramsHash: request.e2eEntry?.paramsHash,
+              errorHash: request.e2eEntry?.errorHash,
+              errorSummary: request.e2eEntry?.errorSummary,
+              paramsPreview: request.e2eEntry?.paramsPreview,
+              marker
+            });
+            const waitMs = parseWaitMs(rawArgs);
+            let waitStatus = "";
+            if (waitMs > 0 && api.runtime.subagent.waitForRun && result?.runId) {
+              const waitResult = await api.runtime.subagent.waitForRun({
+                runId: result.runId,
+                timeoutMs: waitMs
+              });
+              waitStatus = `\nWait result: ${waitResult.status}${waitResult.error ? ` (${waitResult.error})` : ""}.`;
+            }
+            return {
+              text: [
+                "Loop Guard E2E completion test started.",
+                `Marker: ${marker}`,
+                `Requester session: ${request.requesterSessionKey || "unknown"}`,
+                `Executor session: ${request.sessionKey}`,
+                `Executor run: ${result?.runId || "unknown"}`,
+                "Completion delivery requested: yes",
+                waitStatus.trim()
+              ]
+                .filter(Boolean)
+                .join("\n")
+            };
+          } catch (error) {
+            const message = String(error?.message || error);
+            recorder.record({
+              action: "handoff-failed",
+              trigger: "slash-e2e",
+              runtime: context.runtime,
+              agentId: context.agentId,
+              sessionId: context.sessionId,
+              sessionKey: context.sessionKey,
+              runId: context.runId,
+              error: message,
+              marker
+            });
+            return { text: `Loop Guard E2E failed: ${message}` };
+          }
         }
         if (action === "approve") {
           const cfg = refreshConfig();
