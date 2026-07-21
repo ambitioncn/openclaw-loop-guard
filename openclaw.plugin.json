@@ -32,6 +32,18 @@
         "minimum": 0,
         "default": 180000
       },
+      "driverModel": {
+        "type": "string",
+        "description": "Model acting as the primary reasoning driver, for example qwen-local/qwen36-uncensored-llamacpp."
+      },
+      "executorModel": {
+        "type": "string",
+        "description": "Higher-capability model recommended for tool execution escalation, for example openai/gpt-5.5 or anthropic/claude-sonnet."
+      },
+      "executorRuntime": {
+        "type": "string",
+        "default": "codex"
+      },
       "softThreshold": {
         "type": "integer",
         "minimum": 1,

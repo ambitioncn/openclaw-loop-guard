@@ -6,7 +6,8 @@ import {
   createLoopGuardState,
   normalizeConfig,
   shouldBlockRepeatedCall,
-  shouldTreatResultAsFailure
+  shouldTreatResultAsFailure,
+  withExecutorHint
 } from "../src/loop.js";
 
 test("normalizes config thresholds", () => {
@@ -17,6 +18,7 @@ test("normalizes config thresholds", () => {
   assert.equal(normalizeConfig({ blockRepeatedCalls: true }).blockRepeatedCalls, true);
   assert.equal(normalizeConfig({ blockRepeatedCalls: "true" }).blockRepeatedCalls, false);
   assert.equal(normalizeConfig({ pendingTimeoutMs: 0 }).pendingTimeoutMs, 0);
+  assert.equal(normalizeConfig({ driverModel: " qwen ", executorModel: " gpt " }).driverModel, "qwen");
 });
 
 test("creates stable signatures without volatile ids", () => {
@@ -129,4 +131,15 @@ test("records pending timeouts and blocks matching retries by default", () => {
     shouldBlockRepeatedCall(entry, { blockAfterPendingTimeout: false }),
     false
   );
+});
+
+test("adds configured driver and executor roles to strategy messages", () => {
+  const message = withExecutorHint("change strategy", {
+    driverModel: "qwen-local/qwen36",
+    executorModel: "openai/gpt-5.5",
+    executorRuntime: "codex"
+  });
+  assert.match(message, /driver=qwen-local\/qwen36/);
+  assert.match(message, /executor=openai\/gpt-5\.5/);
+  assert.match(message, /executorRuntime=codex/);
 });

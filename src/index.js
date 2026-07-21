@@ -6,7 +6,8 @@ import {
   defaultStatePath,
   normalizeConfig,
   shouldBlockRepeatedCall,
-  shouldTreatResultAsFailure
+  shouldTreatResultAsFailure,
+  withExecutorHint
 } from "./loop.js";
 
 function resolveRuntimeConfig(api) {
@@ -125,7 +126,7 @@ export default definePluginEntry({
 
         return {
           block: true,
-          blockReason: `${entry.pendingTimeout ? cfg.pendingMessage : cfg.hardMessage} Signature: ${entry.toolName} params=${entry.paramsHash} error=${entry.errorHash}.`
+          blockReason: `${withExecutorHint(entry.pendingTimeout ? cfg.pendingMessage : cfg.hardMessage, cfg)} Signature: ${entry.toolName} params=${entry.paramsHash} error=${entry.errorHash}.`
         };
       },
       { priority: 95, timeoutMs: 2000 }
@@ -170,7 +171,7 @@ export default definePluginEntry({
         return {
           result: createGuardedToolResult(
             event.result,
-            entry.count >= cfg.hardThreshold ? cfg.hardMessage : cfg.softMessage,
+            withExecutorHint(entry.count >= cfg.hardThreshold ? cfg.hardMessage : cfg.softMessage, cfg),
             entry
           )
         };

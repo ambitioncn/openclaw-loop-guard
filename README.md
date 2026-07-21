@@ -22,6 +22,7 @@ The first implementation is deliberately small:
 - Third matching failure: can block the same call when `blockRepeatedCalls` is enabled.
 - High-risk tools can be blocked at the soft threshold when hard blocking is enabled.
 - A high-risk tool call that exceeds `pendingTimeoutMs` is treated as a stuck call; the same call is blocked on retry by default.
+- Model roles are configurable with `driverModel`, `executorModel`, and `executorRuntime`; the plugin never hard-codes Qwen, GPT, or Claude.
 
 Hard blocking is disabled by default while the plugin is being proven on real OpenClaw sessions.
 With the default config, repeated failures are still rewritten with model-visible guidance.
@@ -55,6 +56,9 @@ Enable it explicitly in `openclaw.json` if your OpenClaw install requires plugin
           "blockRepeatedCalls": false,
           "blockAfterPendingTimeout": true,
           "pendingTimeoutMs": 180000,
+          "driverModel": "qwen-local/qwen36-uncensored-llamacpp",
+          "executorModel": "openai/gpt-5.5",
+          "executorRuntime": "codex",
           "softThreshold": 2,
           "hardThreshold": 3,
           "windowMs": 600000,

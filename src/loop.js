@@ -7,6 +7,9 @@ const DEFAULT_CONFIG = {
   blockRepeatedCalls: false,
   blockAfterPendingTimeout: true,
   pendingTimeoutMs: 180 * 1000,
+  driverModel: "",
+  executorModel: "",
+  executorRuntime: "codex",
   softThreshold: 2,
   hardThreshold: 3,
   windowMs: 10 * 60 * 1000,
@@ -37,6 +40,9 @@ export function normalizeConfig(input = {}) {
   cfg.blockRepeatedCalls = cfg.blockRepeatedCalls === true;
   cfg.blockAfterPendingTimeout = cfg.blockAfterPendingTimeout !== false;
   cfg.pendingTimeoutMs = nonNegativeInt(cfg.pendingTimeoutMs, DEFAULT_CONFIG.pendingTimeoutMs);
+  cfg.driverModel = String(cfg.driverModel || "").trim();
+  cfg.executorModel = String(cfg.executorModel || "").trim();
+  cfg.executorRuntime = String(cfg.executorRuntime || DEFAULT_CONFIG.executorRuntime).trim();
   cfg.softThreshold = positiveInt(cfg.softThreshold, DEFAULT_CONFIG.softThreshold);
   cfg.hardThreshold = Math.max(
     cfg.softThreshold,
@@ -210,6 +216,16 @@ export function createGuardedToolResult(originalResult, message, entry) {
       }
     }
   };
+}
+
+export function withExecutorHint(message, config) {
+  const cfg = normalizeConfig(config);
+  if (!cfg.driverModel && !cfg.executorModel) return message;
+  const parts = [];
+  if (cfg.driverModel) parts.push(`driver=${cfg.driverModel}`);
+  if (cfg.executorModel) parts.push(`executor=${cfg.executorModel}`);
+  if (cfg.executorRuntime) parts.push(`executorRuntime=${cfg.executorRuntime}`);
+  return `${message}\n\nConfigured model roles: ${parts.join(", ")}. If the driver is stuck, hand tool execution to the configured executor instead of repeating the same call.`;
 }
 
 export function shouldBlockRepeatedCall(entry, config, toolName = entry?.toolName) {
