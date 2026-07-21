@@ -351,6 +351,7 @@ export default definePluginEntry({
               provider: request.provider,
               model: request.model,
               toolsAllow: request.toolsAllow,
+              approvalGrant: request.approvalGrant,
               lightContext: true,
               deliver: false,
               idempotencyKey: request.idempotencyKey
@@ -365,6 +366,8 @@ export default definePluginEntry({
               approvedToolsAllow: request.toolsAllow,
               approvedWriteRoots: request.writeRoots,
               approvedConfirmRisky: request.confirmRisky,
+              approvedGrantId: request.approvalGrant?.grantId,
+              approvedGrantExpiresAt: request.approvalGrant?.expiresAt,
               approvedSelector: approval.selector,
               sourceHandoffRunId: event.handoffRunId,
               toolName: event.toolName,

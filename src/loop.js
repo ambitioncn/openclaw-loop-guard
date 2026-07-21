@@ -476,6 +476,24 @@ export function createApprovedHandoffRequest({
   });
   const approvalId = new Date(approvedAt).toISOString().replace(/[:.]/g, "-");
   const idempotencyKey = `loop-guard:approve:${sessionKey}:${event.paramsHash || "params"}:${event.errorHash || "error"}:${approvalId}`;
+  const approvalGrant = riskyApproved
+    ? {
+        kind: "loop_guard_inherited_approval",
+        grantId: idempotencyKey,
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
+        approvalsReviewer: "user",
+        expiresAt: new Date(approvedAt + 10 * 60 * 1000).toISOString(),
+        toolsAllow: allowedTools,
+        writeRoots: approvedWriteRoots,
+        sourceHandoffRunId: event.handoffRunId,
+        sourceRunId: event.runId,
+        sourceSessionKey: event.sessionKey || event.sessionId,
+        sourceToolName: event.toolName,
+        sourceParamsHash: event.paramsHash,
+        sourceErrorHash: event.errorHash
+      }
+    : undefined;
   const message = [
     "Loop Guard approval received. Continue the existing handoff session with explicitly approved tools.",
     "",
@@ -510,6 +528,7 @@ export function createApprovedHandoffRequest({
     toolsAllow: allowedTools,
     writeRoots: approvedWriteRoots,
     confirmRisky: riskyApproved,
+    approvalGrant,
     provider: model.provider,
     model: model.model
   };

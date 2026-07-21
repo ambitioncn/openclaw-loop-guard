@@ -351,6 +351,12 @@ test("builds approved handoff request for the same session with approved tools",
   assert.equal(request.model, "gpt-5.5");
   assert.deepEqual(request.toolsAllow, ["read", "exec", "bash", "apply_patch"]);
   assert.deepEqual(request.writeRoots, ["/repo"]);
+  assert.equal(request.approvalGrant.kind, "loop_guard_inherited_approval");
+  assert.equal(request.approvalGrant.approvalPolicy, "never");
+  assert.equal(request.approvalGrant.sandbox, "danger-full-access");
+  assert.deepEqual(request.approvalGrant.toolsAllow, ["read", "exec", "bash", "apply_patch"]);
+  assert.deepEqual(request.approvalGrant.writeRoots, ["/repo"]);
+  assert.equal(request.approvalGrant.sourceRunId, "run-1");
   assert.match(request.idempotencyKey, /^loop-guard:approve:/);
   assert.match(request.message, /Approval received/i);
   assert.match(request.message, /Approved tools: read, exec, bash, apply_patch/);
@@ -371,6 +377,24 @@ test("scope rules forbid writes and risky operations without explicit scope", ()
   assert.match(rules, /Every exec command/);
   assert.match(rules, /need separate approval/);
   assert.match(rules, /ssh, systemctl/);
+});
+
+test("safe approvals do not create an inherited execution grant", () => {
+  const request = createApprovedHandoffRequest({
+    event: {
+      action: "handoff-started",
+      handoffSessionKey: "agent:main:subagent:loop-guard-source-a-b",
+      executorModel: "openai/gpt-5.5",
+      toolName: "exec",
+      paramsHash: "a",
+      errorHash: "b"
+    },
+    config: { executorModel: "openai/gpt-5.5" },
+    toolsAllow: ["read", "exec"],
+    confirmRisky: false
+  });
+  assert.equal(request.confirmRisky, false);
+  assert.equal(request.approvalGrant, undefined);
 });
 
 test("approved handoff can allow risky operations by default", () => {
