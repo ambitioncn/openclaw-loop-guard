@@ -1,0 +1,65 @@
+{
+  "id": "loop-guard",
+  "name": "Loop Guard",
+  "description": "Detects repeated OpenClaw tool failures and blocks unproductive retry loops.",
+  "contracts": {
+    "agentToolResultMiddleware": [
+      "openclaw",
+      "codex"
+    ]
+  },
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "default": true
+      },
+      "softThreshold": {
+        "type": "integer",
+        "minimum": 1,
+        "default": 2
+      },
+      "hardThreshold": {
+        "type": "integer",
+        "minimum": 1,
+        "default": 3
+      },
+      "windowMs": {
+        "type": "integer",
+        "minimum": 1000,
+        "default": 600000
+      },
+      "maxEntries": {
+        "type": "integer",
+        "minimum": 10,
+        "default": 500
+      },
+      "statePath": {
+        "type": "string"
+      },
+      "highRiskTools": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "default": [
+          "exec",
+          "apply_patch",
+          "write",
+          "edit"
+        ]
+      },
+      "softMessage": {
+        "type": "string"
+      },
+      "hardMessage": {
+        "type": "string"
+      }
+    }
+  }
+}
