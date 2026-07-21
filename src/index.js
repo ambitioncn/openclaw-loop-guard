@@ -22,6 +22,7 @@ export default definePluginEntry({
   register(api) {
     let config = resolveRuntimeConfig(api);
     const state = createLoopGuardState(config);
+    const pendingTimers = new Map();
     const recorder = createStateRecorder({
       statePath: config.statePath || defaultStatePath(),
       logger: api.logger
@@ -32,9 +33,46 @@ export default definePluginEntry({
       return config;
     };
 
+    const clearPendingTimer = (toolCallId) => {
+      if (!toolCallId) return;
+      const timer = pendingTimers.get(toolCallId);
+      if (!timer) return;
+      clearTimeout(timer);
+      pendingTimers.delete(toolCallId);
+    };
+
+    const trackPendingCall = (event, ctx, cfg) => {
+      if (!event.toolCallId) return;
+      if (cfg.pendingTimeoutMs <= 0) return;
+      if (!cfg.highRiskTools.includes(String(event.toolName || ""))) return;
+      clearPendingTimer(event.toolCallId);
+      const timer = setTimeout(() => {
+        pendingTimers.delete(event.toolCallId);
+        const entry = state.observePendingTimeout({
+          toolName: event.toolName,
+          params: event.params,
+          timeoutMs: cfg.pendingTimeoutMs,
+          observationId: event.toolCallId
+        });
+        recorder.record({
+          action: "pending-timeout",
+          runtime: "hook",
+          agentId: ctx.agentId,
+          sessionId: ctx.sessionId,
+          sessionKey: ctx.sessionKey,
+          runId: event.runId ?? ctx.runId,
+          toolCallId: event.toolCallId,
+          ...entry
+        });
+      }, cfg.pendingTimeoutMs);
+      timer.unref?.();
+      pendingTimers.set(event.toolCallId, timer);
+    };
+
     api.on(
       "after_tool_call",
       async (event, ctx) => {
+        clearPendingTimer(event.toolCallId);
         const cfg = refreshConfig();
         if (!cfg.enabled) return;
         if (!shouldTreatResultAsFailure(event)) return;
@@ -87,10 +125,20 @@ export default definePluginEntry({
 
         return {
           block: true,
-          blockReason: `${cfg.hardMessage} Signature: ${entry.toolName} params=${entry.paramsHash} error=${entry.errorHash}.`
+          blockReason: `${entry.pendingTimeout ? cfg.pendingMessage : cfg.hardMessage} Signature: ${entry.toolName} params=${entry.paramsHash} error=${entry.errorHash}.`
         };
       },
       { priority: 95, timeoutMs: 2000 }
+    );
+
+    api.on(
+      "before_tool_call",
+      async (event, ctx) => {
+        const cfg = refreshConfig();
+        if (!cfg.enabled) return;
+        trackPendingCall(event, ctx, cfg);
+      },
+      { priority: 10, timeoutMs: 1000 }
     );
 
     api.registerAgentToolResultMiddleware(

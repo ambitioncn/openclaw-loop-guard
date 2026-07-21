@@ -23,6 +23,15 @@
         "type": "boolean",
         "default": false
       },
+      "blockAfterPendingTimeout": {
+        "type": "boolean",
+        "default": true
+      },
+      "pendingTimeoutMs": {
+        "type": "integer",
+        "minimum": 0,
+        "default": 60000
+      },
       "softThreshold": {
         "type": "integer",
         "minimum": 1,
@@ -62,6 +71,9 @@
         "type": "string"
       },
       "hardMessage": {
+        "type": "string"
+      },
+      "pendingMessage": {
         "type": "string"
       }
     }

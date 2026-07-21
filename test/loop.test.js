@@ -16,6 +16,7 @@ test("normalizes config thresholds", () => {
   );
   assert.equal(normalizeConfig({ blockRepeatedCalls: true }).blockRepeatedCalls, true);
   assert.equal(normalizeConfig({ blockRepeatedCalls: "true" }).blockRepeatedCalls, false);
+  assert.equal(normalizeConfig({ pendingTimeoutMs: 0 }).pendingTimeoutMs, 0);
 });
 
 test("creates stable signatures without volatile ids", () => {
@@ -106,5 +107,26 @@ test("uses soft threshold for high-risk tools when hard blocking is enabled", ()
       "exec"
     ),
     true
+  );
+});
+
+test("records pending timeouts and blocks matching retries by default", () => {
+  const state = createLoopGuardState({ pendingTimeoutMs: 50 });
+  const entry = state.observePendingTimeout(
+    {
+      toolName: "exec",
+      params: { cmd: "ssh host long-running-command" },
+      timeoutMs: 50
+    },
+    1000
+  );
+  assert.equal(entry.pendingTimeout, true);
+  assert.equal(
+    shouldBlockRepeatedCall(entry, { blockRepeatedCalls: false, blockAfterPendingTimeout: true }),
+    true
+  );
+  assert.equal(
+    shouldBlockRepeatedCall(entry, { blockAfterPendingTimeout: false }),
+    false
   );
 });

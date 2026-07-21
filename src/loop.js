@@ -5,6 +5,8 @@ import path from "node:path";
 const DEFAULT_CONFIG = {
   enabled: true,
   blockRepeatedCalls: false,
+  blockAfterPendingTimeout: true,
+  pendingTimeoutMs: 60 * 1000,
   softThreshold: 2,
   hardThreshold: 3,
   windowMs: 10 * 60 * 1000,
@@ -13,7 +15,9 @@ const DEFAULT_CONFIG = {
   softMessage:
     "Loop Guard: this tool call has failed repeatedly with the same error. Do not retry the same call. Choose a different strategy, change the command/arguments, ask for missing permission, or escalate to a more reliable executor.",
   hardMessage:
-    "Loop Guard blocked this tool call because it repeated the same known failure. Stop retrying this exact call and choose a different approach."
+    "Loop Guard blocked this tool call because it repeated the same known failure. Stop retrying this exact call and choose a different approach.",
+  pendingMessage:
+    "Loop Guard blocked this tool call because the same call previously appeared to hang without returning. Use a timeout, change the command/arguments, check the tool runner, or use a different executor."
 };
 
 const VOLATILE_KEYS = new Set([
@@ -31,6 +35,8 @@ export function normalizeConfig(input = {}) {
   const cfg = { ...DEFAULT_CONFIG, ...(isObject(input) ? input : {}) };
   cfg.enabled = cfg.enabled !== false;
   cfg.blockRepeatedCalls = cfg.blockRepeatedCalls === true;
+  cfg.blockAfterPendingTimeout = cfg.blockAfterPendingTimeout !== false;
+  cfg.pendingTimeoutMs = nonNegativeInt(cfg.pendingTimeoutMs, DEFAULT_CONFIG.pendingTimeoutMs);
   cfg.softThreshold = positiveInt(cfg.softThreshold, DEFAULT_CONFIG.softThreshold);
   cfg.hardThreshold = Math.max(
     cfg.softThreshold,
@@ -43,6 +49,7 @@ export function normalizeConfig(input = {}) {
     : [...DEFAULT_CONFIG.highRiskTools];
   cfg.softMessage = String(cfg.softMessage || DEFAULT_CONFIG.softMessage);
   cfg.hardMessage = String(cfg.hardMessage || DEFAULT_CONFIG.hardMessage);
+  cfg.pendingMessage = String(cfg.pendingMessage || DEFAULT_CONFIG.pendingMessage);
   return cfg;
 }
 
@@ -97,6 +104,19 @@ export function createLoopGuardState(config = {}) {
     return { ...entry };
   }
 
+  function observePendingTimeout(input, now = Date.now()) {
+    const entry = observeFailure(
+      {
+        ...input,
+        error: `Tool call did not return within ${positiveInt(input.timeoutMs, cfg.pendingTimeoutMs)}ms`
+      },
+      now
+    );
+    const stored = entries.get(entry.key);
+    if (stored) stored.pendingTimeout = true;
+    return { ...entry, pendingTimeout: true };
+  }
+
   function getFailure(input, now = Date.now()) {
     sweep(now);
     const signature = createFailureSignature(input);
@@ -126,7 +146,14 @@ export function createLoopGuardState(config = {}) {
     return [...entries.values()].map((entry) => ({ ...entry }));
   }
 
-  return { observeFailure, getFailure, getMostRecentFailureForCall, clear, snapshot };
+  return {
+    observeFailure,
+    observePendingTimeout,
+    getFailure,
+    getMostRecentFailureForCall,
+    clear,
+    snapshot
+  };
 }
 
 export function createFailureSignature({ toolName, params, args, result, error }) {
@@ -188,6 +215,7 @@ export function createGuardedToolResult(originalResult, message, entry) {
 export function shouldBlockRepeatedCall(entry, config, toolName = entry?.toolName) {
   if (!entry) return false;
   const cfg = normalizeConfig(config);
+  if (entry.pendingTimeout) return cfg.blockAfterPendingTimeout;
   if (!cfg.blockRepeatedCalls) return false;
   const normalizedToolName = String(toolName || entry.toolName || "unknown");
   const threshold = cfg.highRiskTools.includes(normalizedToolName)
@@ -263,6 +291,11 @@ function sha256(value) {
 function positiveInt(value, fallback) {
   const n = Number(value);
   return Number.isInteger(n) && n > 0 ? n : fallback;
+}
+
+function nonNegativeInt(value, fallback) {
+  const n = Number(value);
+  return Number.isInteger(n) && n >= 0 ? n : fallback;
 }
 
 function isObject(value) {

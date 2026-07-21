@@ -8,6 +8,7 @@ It is intended for local-model deployments where a capable reasoning model is us
 
 - Observes tool failures with `after_tool_call`.
 - Rewrites repeated failure results with `agentToolResultMiddleware`.
+- Records high-risk tool calls that do not return before `pendingTimeoutMs`.
 - Optionally blocks unproductive repeat calls with `before_tool_call`.
 - Stores lightweight audit events outside the session transcript.
 - Provides a `/loop-guard` command for status and reset.
@@ -20,6 +21,7 @@ The first implementation is deliberately small:
 - Second matching failure: tell the model to choose another strategy.
 - Third matching failure: can block the same call when `blockRepeatedCalls` is enabled.
 - High-risk tools can be blocked at the soft threshold when hard blocking is enabled.
+- A high-risk tool call that exceeds `pendingTimeoutMs` is treated as a stuck call; the same call is blocked on retry by default.
 
 Hard blocking is disabled by default while the plugin is being proven on real OpenClaw sessions.
 With the default config, repeated failures are still rewritten with model-visible guidance.
@@ -51,6 +53,8 @@ Enable it explicitly in `openclaw.json` if your OpenClaw install requires plugin
         "config": {
           "enabled": true,
           "blockRepeatedCalls": false,
+          "blockAfterPendingTimeout": true,
+          "pendingTimeoutMs": 60000,
           "softThreshold": 2,
           "hardThreshold": 3,
           "windowMs": 600000,
