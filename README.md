@@ -30,6 +30,7 @@ The first implementation is deliberately small:
 - When a handoff starts, Loop Guard adds a human-facing approval hint to the guarded tool result. It includes the exact `/loop-guard approve latest ...` command, executor session/run, approved tools, write roots, risky-operation status, and the 10 minute grant lifetime.
 - Approved handoff resume is available with `/loop-guard approve latest`. It reuses the last handoff session and sends an explicitly approved `toolsAllow` list, defaulting to `approvedHandoffToolsAllow`.
 - Approved handoff resume also includes scope rules: write roots, exec timeout requirements, and risky-operation patterns. A human approval is enough to authorize risky operations by default.
+- Pending handoffs have an approval age limit (`approvedHandoffMaxAgeMs`, default 30 minutes) so old background tasks are not resumed accidentally.
 
 Hard blocking is disabled by default while the plugin is being proven on real OpenClaw sessions.
 With the default config, repeated failures are still rewritten with model-visible guidance.
@@ -73,6 +74,7 @@ Enable it explicitly in `openclaw.json` if your OpenClaw install requires plugin
           "approvedHandoffToolsAllow": ["read", "exec", "bash", "apply_patch"],
           "approvedHandoffWriteRoots": [],
           "approvedHandoffAllowRiskyOperations": true,
+          "approvedHandoffMaxAgeMs": 1800000,
           "approvedHandoffRequireExecTimeout": true,
           "approvedHandoffRiskyPatterns": ["ssh", "systemctl", "sudo", "rm", "git push", "npm publish", "secrets"],
           "paramsPreviewMaxChars": 1000,
@@ -110,7 +112,7 @@ If OpenClaw rejects the per-run model override despite that policy, Loop Guard f
 
 `/loop-guard` shows plugin status, the most recent `handoff-started` audit event, its lifecycle state, and the approval command when that handoff is still pending.
 
-`approve` looks up the most recent pending `handoff-started` audit event and continues that same executor session with approved tools. A selector can replace `latest`; it matches the handoff session key, run id, source run id, tool name, params hash, or error hash. Already approved, failed, or completed handoffs are skipped so stale tasks are not re-approved accidentally.
+`approve` looks up the most recent pending `handoff-started` audit event and continues that same executor session with approved tools. A selector can replace `latest`; it matches the handoff session key, run id, source run id, tool name, params hash, or error hash. Already approved, failed, completed, or expired handoffs are skipped so stale tasks are not re-approved accidentally.
 
 For Codex executors, Loop Guard expands approved `exec` to include `bash`, because Codex exposes shell execution as `bash`.
 

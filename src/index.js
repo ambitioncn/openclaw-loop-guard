@@ -333,7 +333,7 @@ export default definePluginEntry({
           const event = findHandoffEvent(
             readRecentEvents(cfg.statePath || defaultStatePath()),
             approval.selector,
-            { requirePending: true }
+            { requirePending: true, maxAgeMs: cfg.approvedHandoffMaxAgeMs }
           );
           if (!event) {
             return {

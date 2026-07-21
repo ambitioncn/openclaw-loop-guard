@@ -94,6 +94,12 @@
         "default": true,
         "description": "When true, a human approve command is enough to authorize configured risky operation patterns for the approved handoff."
       },
+      "approvedHandoffMaxAgeMs": {
+        "type": "integer",
+        "minimum": 0,
+        "default": 1800000,
+        "description": "Maximum age of a pending handoff that /loop-guard approve may resume. Set 0 to disable age checks."
+      },
       "approvedHandoffRequireExecTimeout": {
         "type": "boolean",
         "default": true,

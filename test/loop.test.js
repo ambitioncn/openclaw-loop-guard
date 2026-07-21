@@ -43,6 +43,8 @@ test("normalizes config thresholds", () => {
     "/repo"
   ]);
   assert.equal(normalizeConfig({}).approvedHandoffAllowRiskyOperations, true);
+  assert.equal(normalizeConfig({}).approvedHandoffMaxAgeMs, 1800000);
+  assert.equal(normalizeConfig({ approvedHandoffMaxAgeMs: 0 }).approvedHandoffMaxAgeMs, 0);
   assert.equal(normalizeConfig({ approvedHandoffAllowRiskyOperations: false }).approvedHandoffAllowRiskyOperations, false);
   assert.equal(normalizeConfig({ approvedHandoffRequireExecTimeout: false }).approvedHandoffRequireExecTimeout, false);
   assert.equal(normalizeConfig({ paramsPreviewMaxChars: 120 }).paramsPreviewMaxChars, 120);
@@ -302,6 +304,7 @@ test("builds a human approval prompt for executor handoff", () => {
   assert.match(prompt, /\/loop-guard approve latest tools=read,exec,bash,apply_patch roots=\/repo/);
   assert.match(prompt, /Executor handoff: agent:main:subagent:loop-guard-source-a-b run=run-2/);
   assert.match(prompt, /Approval grant lifetime after approval: 10 minutes/);
+  assert.match(prompt, /can be approved for 30 minutes after it starts/);
   assert.match(prompt, /Original failure: exec params=a error=b/);
 });
 
@@ -382,6 +385,32 @@ test("handoff lifecycle tracks approved and completed states", () => {
   assert.equal(getHandoffLifecycle(events, second).status, "pending");
   assert.equal(findHandoffEvent(events, "latest", { requirePending: true }), second);
   assert.equal(findHandoffEvent(events, "first", { requirePending: true }), undefined);
+});
+
+test("handoff lifecycle marks old pending handoffs stale", () => {
+  const event = {
+    action: "handoff-started",
+    handoffSessionKey: "agent:main:subagent:old",
+    handoffRunId: "run-1",
+    paramsHash: "aaa",
+    at: "2026-07-22T00:00:00.000Z"
+  };
+  const events = [event];
+  assert.equal(
+    getHandoffLifecycle(events, event, {
+      now: Date.parse("2026-07-22T00:31:00.000Z"),
+      maxAgeMs: 30 * 60 * 1000
+    }).status,
+    "stale"
+  );
+  assert.equal(
+    findHandoffEvent(events, "latest", {
+      requirePending: true,
+      now: Date.parse("2026-07-22T00:31:00.000Z"),
+      maxAgeMs: 30 * 60 * 1000
+    }),
+    undefined
+  );
 });
 
 test("status message includes latest handoff and approval command", () => {

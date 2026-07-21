@@ -18,6 +18,7 @@ const DEFAULT_CONFIG = {
   approvedHandoffToolsAllow: ["read", "exec", "bash", "apply_patch"],
   approvedHandoffWriteRoots: [],
   approvedHandoffAllowRiskyOperations: true,
+  approvedHandoffMaxAgeMs: 30 * 60 * 1000,
   approvedHandoffRequireExecTimeout: true,
   approvedHandoffRiskyPatterns: [
     "ssh",
@@ -87,6 +88,10 @@ export function normalizeConfig(input = {}) {
     DEFAULT_CONFIG.approvedHandoffWriteRoots
   );
   cfg.approvedHandoffAllowRiskyOperations = cfg.approvedHandoffAllowRiskyOperations !== false;
+  cfg.approvedHandoffMaxAgeMs = nonNegativeInt(
+    cfg.approvedHandoffMaxAgeMs,
+    DEFAULT_CONFIG.approvedHandoffMaxAgeMs
+  );
   cfg.approvedHandoffRequireExecTimeout = cfg.approvedHandoffRequireExecTimeout !== false;
   cfg.approvedHandoffRiskyPatterns = normalizeStringList(
     cfg.approvedHandoffRiskyPatterns,
@@ -320,6 +325,9 @@ export function createApprovalPrompt({ handoff, config, entry }) {
     `Approved write roots if sent: ${roots.length > 0 ? roots.join(", ") : "none"}`,
     `Risky operations included if sent: ${risky}`,
     "Approval grant lifetime after approval: 10 minutes",
+    cfg.approvedHandoffMaxAgeMs > 0
+      ? `This handoff can be approved for ${Math.round(cfg.approvedHandoffMaxAgeMs / 60000)} minutes after it starts`
+      : "This handoff has no pre-approval age limit",
     entry
       ? `Original failure: ${entry.toolName} params=${entry.paramsHash} error=${entry.errorHash}`
       : "",
@@ -333,7 +341,11 @@ export function createApprovalPrompt({ handoff, config, entry }) {
 export function createStatusMessage({ config, snapshot = [], events = [] }) {
   const cfg = normalizeConfig(config);
   const latestHandoff = findHandoffEvent(events, "latest");
-  const lifecycle = latestHandoff ? getHandoffLifecycle(events, latestHandoff) : undefined;
+  const lifecycle = latestHandoff
+    ? getHandoffLifecycle(events, latestHandoff, {
+        maxAgeMs: cfg.approvedHandoffMaxAgeMs
+      })
+    : undefined;
   const lines = [
     `Loop Guard: ${cfg.enabled ? "enabled" : "disabled"}; tracked failures=${snapshot.length}; soft=${cfg.softThreshold}; hard=${cfg.hardThreshold}.`,
     `Handoff: ${cfg.handoffEnabled ? "enabled" : "disabled"}; executor=${cfg.executorModel || "unset"}; runtime=${cfg.executorRuntime || "unset"}.`
@@ -509,7 +521,13 @@ export function findHandoffEvent(events, selector = "latest", options = {}) {
   const normalizedSelector = String(selector || "latest").trim();
   const candidates = [...events].reverse().filter((event) => event?.action === "handoff-started");
   const filtered = options.requirePending
-    ? candidates.filter((event) => getHandoffLifecycle(events, event).status === "pending")
+    ? candidates.filter(
+        (event) =>
+          getHandoffLifecycle(events, event, {
+            now: options.now,
+            maxAgeMs: options.maxAgeMs
+          }).status === "pending"
+      )
     : candidates;
   if (normalizedSelector === "latest") return filtered[0];
   return filtered.find((event) => {
@@ -526,14 +544,20 @@ export function findHandoffEvent(events, selector = "latest", options = {}) {
   });
 }
 
-export function getHandoffLifecycle(events, handoffEvent) {
+export function getHandoffLifecycle(events, handoffEvent, options = {}) {
   if (!handoffEvent) return { status: "unknown" };
   const startIndex = events.indexOf(handoffEvent);
   const related = events
     .slice(startIndex >= 0 ? startIndex + 1 : 0)
     .filter((event) => isRelatedHandoffEvent(event, handoffEvent));
   const latest = related[related.length - 1];
-  if (!latest) return { status: "pending" };
+  if (!latest) {
+    const stale = isStaleHandoff(handoffEvent, options);
+    return {
+      status: stale ? "stale" : "pending",
+      stale
+    };
+  }
   const statusByAction = {
     "handoff-approved-started": "approved",
     "handoff-approved-failed": "approval_failed",
@@ -545,6 +569,21 @@ export function getHandoffLifecycle(events, handoffEvent) {
     latestAction: latest.action,
     latestAt: latest.at
   };
+}
+
+function isStaleHandoff(handoffEvent, { now = Date.now(), maxAgeMs = DEFAULT_CONFIG.approvedHandoffMaxAgeMs } = {}) {
+  const ageLimit = nonNegativeInt(maxAgeMs, DEFAULT_CONFIG.approvedHandoffMaxAgeMs);
+  if (ageLimit <= 0) return false;
+  const startedAt = parseEventTime(handoffEvent);
+  if (!Number.isFinite(startedAt)) return false;
+  return now - startedAt > ageLimit;
+}
+
+function parseEventTime(event) {
+  const value = event?.at || event?.timestamp || event?.time;
+  if (!value) return NaN;
+  const parsed = typeof value === "number" ? value : Date.parse(String(value));
+  return Number.isFinite(parsed) ? parsed : NaN;
 }
 
 function isRelatedHandoffEvent(event, handoffEvent) {
