@@ -462,6 +462,23 @@ export function createHandoffRequest({ trigger, entry, config, context = {} }) {
   };
 }
 
+export function createSubagentRunParams(request, overrides = {}) {
+  return {
+    sessionKey: request.sessionKey,
+    requesterSessionKey: request.requesterSessionKey,
+    expectsCompletionMessage: request.expectsCompletionMessage,
+    message: request.message,
+    provider: request.provider,
+    model: request.model,
+    toolsAllow: request.toolsAllow,
+    approvalGrant: request.approvalGrant,
+    lightContext: true,
+    deliver: false,
+    idempotencyKey: request.idempotencyKey,
+    ...overrides
+  };
+}
+
 export function parseApproveArgs(args, defaultTools = DEFAULT_CONFIG.approvedHandoffToolsAllow) {
   const tokens = String(args || "")
     .trim()

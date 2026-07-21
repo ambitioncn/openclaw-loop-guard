@@ -10,6 +10,7 @@ import {
   createLoopGuardState,
   createParamsPreview,
   createStatusMessage,
+  createSubagentRunParams,
   findHandoffEvent,
   getHandoffLifecycle,
   normalizeApprovedToolAllowList,
@@ -259,6 +260,32 @@ test("builds subagent handoff request from configured executor", () => {
   assert.match(request.message, /toolsAllow=\[\]/);
   assert.match(request.message, /permission/);
   assert.match(request.idempotencyKey, /loop-guard:warn:/);
+});
+
+test("passes completion delivery fields to subagent runs", () => {
+  const request = createHandoffRequest({
+    trigger: "warn",
+    entry: {
+      key: "exec:a:b",
+      count: 2,
+      toolName: "exec",
+      paramsHash: "a",
+      errorHash: "b",
+      errorSummary: "not found"
+    },
+    config: { handoffEnabled: true, executorModel: "openai/gpt-5.5" },
+    context: {
+      agentId: "main",
+      sessionKey: "agent:main:feishu:direct:user",
+      runId: "run-1"
+    }
+  });
+  const params = createSubagentRunParams(request);
+  assert.equal(params.sessionKey, request.sessionKey);
+  assert.equal(params.requesterSessionKey, "agent:main:feishu:direct:user");
+  assert.equal(params.expectsCompletionMessage, true);
+  assert.equal(params.deliver, false);
+  assert.equal(params.lightContext, true);
 });
 
 test("builds handoff prompt for explicitly allowed tools", () => {

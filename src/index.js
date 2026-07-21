@@ -5,6 +5,7 @@ import {
   createHandoffRequest,
   createGuardedToolResult,
   createLoopGuardState,
+  createSubagentRunParams,
   createStatusMessage,
   createStateRecorder,
   defaultStatePath,
@@ -41,6 +42,27 @@ export default definePluginEntry({
     const refreshConfig = () => {
       config = resolveRuntimeConfig(api);
       return config;
+    };
+
+    const createHandoffContext = (base, entry, cfg) => {
+      if (base.sessionKey || base.sessionId) return base;
+      const related = readRecentEvents(cfg.statePath || defaultStatePath())
+        .reverse()
+        .find(
+          (event) =>
+            event?.action === "observe" &&
+            event.callKey &&
+            event.callKey === entry.callKey &&
+            (event.sessionKey || event.sessionId)
+        );
+      if (!related) return base;
+      return {
+        ...base,
+        agentId: base.agentId || related.agentId,
+        sessionId: base.sessionId || related.sessionId,
+        sessionKey: base.sessionKey || related.sessionKey,
+        runId: base.runId || related.runId
+      };
     };
 
     const clearPendingTimer = (toolCallId) => {
@@ -102,16 +124,7 @@ export default definePluginEntry({
       if (handoffKeys.has(request.idempotencyKey)) return undefined;
       handoffKeys.add(request.idempotencyKey);
       try {
-        const runParams = {
-          sessionKey: request.sessionKey,
-          message: request.message,
-          provider: request.provider,
-          model: request.model,
-          toolsAllow: request.toolsAllow,
-          lightContext: true,
-          deliver: false,
-          idempotencyKey: request.idempotencyKey
-        };
+        const runParams = createSubagentRunParams(request);
         const result = await api.runtime.subagent.run(runParams);
         recorder.record({
           action: "handoff-started",
@@ -131,14 +144,10 @@ export default definePluginEntry({
         const message = String(error?.message || error);
         if (/override is not authorized|not trusted|not allowlisted/i.test(message)) {
           try {
-            const fallbackResult = await api.runtime.subagent.run({
-              sessionKey: request.sessionKey,
+            const fallbackResult = await api.runtime.subagent.run(createSubagentRunParams(request, {
               message: `${request.message}\n\nNote: the requested executor model override (${cfg.executorModel}) was rejected by OpenClaw policy, so this fallback handoff is running on the session default model.`,
-              toolsAllow: request.toolsAllow,
-              lightContext: true,
-              deliver: false,
               idempotencyKey: `${request.idempotencyKey}:default-model-fallback`
-            });
+            }));
             recorder.record({
               action: "handoff-started",
               trigger,
@@ -293,14 +302,15 @@ export default definePluginEntry({
           toolCallId: event.toolCallId,
           ...entry
         });
-        const handoff = await maybeStartHandoff(action, entry, {
+        const handoffContext = createHandoffContext({
           runtime: ctx.runtime,
           agentId: ctx.agentId,
           sessionId: ctx.sessionId,
           sessionKey: ctx.sessionKey,
           runId: ctx.runId,
           toolCallId: event.toolCallId
-        });
+        }, entry, cfg);
+        const handoff = await maybeStartHandoff(action, entry, handoffContext);
 
         return {
           result: createGuardedToolResult(
@@ -348,17 +358,7 @@ export default definePluginEntry({
               writeRoots: approval.writeRoots,
               confirmRisky: approval.confirmRisky
             });
-            const runParams = {
-              sessionKey: request.sessionKey,
-              message: request.message,
-              provider: request.provider,
-              model: request.model,
-              toolsAllow: request.toolsAllow,
-              approvalGrant: request.approvalGrant,
-              lightContext: true,
-              deliver: false,
-              idempotencyKey: request.idempotencyKey
-            };
+            const runParams = createSubagentRunParams(request);
             const result = await api.runtime.subagent.run(runParams);
             recorder.record({
               action: "handoff-approved-started",
