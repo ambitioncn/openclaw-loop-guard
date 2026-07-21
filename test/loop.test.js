@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  createHandoffRequest,
   createFailureSignature,
   createGuardedToolResult,
   createLoopGuardState,
   normalizeConfig,
   shouldBlockRepeatedCall,
+  shouldStartHandoff,
   shouldTreatResultAsFailure,
+  splitModelRef,
   withExecutorHint
 } from "../src/loop.js";
 
@@ -19,6 +22,7 @@ test("normalizes config thresholds", () => {
   assert.equal(normalizeConfig({ blockRepeatedCalls: "true" }).blockRepeatedCalls, false);
   assert.equal(normalizeConfig({ pendingTimeoutMs: 0 }).pendingTimeoutMs, 0);
   assert.equal(normalizeConfig({ driverModel: " qwen ", executorModel: " gpt " }).driverModel, "qwen");
+  assert.equal(normalizeConfig({ handoffEnabled: true }).handoffEnabled, true);
 });
 
 test("creates stable signatures without volatile ids", () => {
@@ -142,4 +146,64 @@ test("adds configured driver and executor roles to strategy messages", () => {
   assert.match(message, /driver=qwen-local\/qwen36/);
   assert.match(message, /executor=openai\/gpt-5\.5/);
   assert.match(message, /executorRuntime=codex/);
+});
+
+test("requires explicit handoff enablement and executor model", () => {
+  const entry = {
+    key: "exec:a:b",
+    count: 2,
+    toolName: "exec",
+    paramsHash: "a",
+    errorHash: "b",
+    errorSummary: "not found"
+  };
+  assert.equal(shouldStartHandoff("warn", entry, { executorModel: "openai/gpt-5.5" }), false);
+  assert.equal(shouldStartHandoff("warn", entry, { handoffEnabled: true }), false);
+  assert.equal(
+    shouldStartHandoff("warn", entry, { handoffEnabled: true, executorModel: "openai/gpt-5.5" }),
+    true
+  );
+  assert.equal(
+    shouldStartHandoff("warn", entry, {
+      handoffEnabled: true,
+      executorModel: "openai/gpt-5.5",
+      handoffOnSoftWarn: false
+    }),
+    false
+  );
+});
+
+test("builds subagent handoff request from configured executor", () => {
+  const entry = {
+    key: "exec:a:b",
+    count: 2,
+    toolName: "exec",
+    paramsHash: "a",
+    errorHash: "b",
+    errorSummary: "not found"
+  };
+  assert.deepEqual(splitModelRef("openai/gpt-5.5"), {
+    provider: "openai",
+    model: "gpt-5.5"
+  });
+  const request = createHandoffRequest({
+    trigger: "warn",
+    entry,
+    config: {
+      handoffEnabled: true,
+      driverModel: "qwen-local/qwen36",
+      executorModel: "openai/gpt-5.5",
+      executorRuntime: "codex"
+    },
+    context: {
+      agentId: "main",
+      sessionKey: "agent:main:feishu:direct:user",
+      runId: "run-1"
+    }
+  });
+  assert.equal(request.provider, "openai");
+  assert.equal(request.model, "gpt-5.5");
+  assert.match(request.sessionKey, /^agent:main:subagent:loop-guard-/);
+  assert.match(request.message, /Take over the tool work/);
+  assert.match(request.idempotencyKey, /loop-guard:warn:/);
 });

@@ -10,6 +10,10 @@ const DEFAULT_CONFIG = {
   driverModel: "",
   executorModel: "",
   executorRuntime: "codex",
+  handoffEnabled: false,
+  handoffOnSoftWarn: true,
+  handoffOnBlock: true,
+  handoffSessionPrefix: "loop-guard",
   softThreshold: 2,
   hardThreshold: 3,
   windowMs: 10 * 60 * 1000,
@@ -43,6 +47,12 @@ export function normalizeConfig(input = {}) {
   cfg.driverModel = String(cfg.driverModel || "").trim();
   cfg.executorModel = String(cfg.executorModel || "").trim();
   cfg.executorRuntime = String(cfg.executorRuntime || DEFAULT_CONFIG.executorRuntime).trim();
+  cfg.handoffEnabled = cfg.handoffEnabled === true;
+  cfg.handoffOnSoftWarn = cfg.handoffOnSoftWarn !== false;
+  cfg.handoffOnBlock = cfg.handoffOnBlock !== false;
+  cfg.handoffSessionPrefix = normalizeSessionSegment(
+    cfg.handoffSessionPrefix || DEFAULT_CONFIG.handoffSessionPrefix
+  );
   cfg.softThreshold = positiveInt(cfg.softThreshold, DEFAULT_CONFIG.softThreshold);
   cfg.hardThreshold = Math.max(
     cfg.softThreshold,
@@ -228,6 +238,61 @@ export function withExecutorHint(message, config) {
   return `${message}\n\nConfigured model roles: ${parts.join(", ")}. If the driver is stuck, hand tool execution to the configured executor instead of repeating the same call.`;
 }
 
+export function shouldStartHandoff(trigger, entry, config) {
+  const cfg = normalizeConfig(config);
+  if (!cfg.enabled || !cfg.handoffEnabled || !cfg.executorModel || !entry) return false;
+  if (trigger === "block") return cfg.handoffOnBlock;
+  if (trigger === "warn" || trigger === "warn-hard") return cfg.handoffOnSoftWarn;
+  if (trigger === "pending-timeout") return cfg.handoffOnBlock;
+  return false;
+}
+
+export function splitModelRef(modelRef) {
+  const value = String(modelRef || "").trim();
+  const slash = value.indexOf("/");
+  if (slash <= 0 || slash === value.length - 1) return { model: value };
+  return {
+    provider: value.slice(0, slash),
+    model: value.slice(slash + 1)
+  };
+}
+
+export function createHandoffRequest({ trigger, entry, config, context = {} }) {
+  const cfg = normalizeConfig(config);
+  const agentId = normalizeSessionSegment(context.agentId || "main");
+  const sourceSession = normalizeSessionSegment(context.sessionKey || context.sessionId || "session");
+  const sessionKey = `agent:${agentId}:subagent:${cfg.handoffSessionPrefix}-${sourceSession}-${entry.paramsHash}-${entry.errorHash}`;
+  const model = splitModelRef(cfg.executorModel);
+  const idempotencyKey = `loop-guard:${trigger}:${sessionKey}:${entry.key}`;
+  const message = [
+    "Loop Guard is handing off a stuck or repeated tool-execution problem.",
+    "",
+    `Trigger: ${trigger}`,
+    `Source agent: ${context.agentId || "unknown"}`,
+    `Source session: ${context.sessionKey || context.sessionId || "unknown"}`,
+    `Source run: ${context.runId || "unknown"}`,
+    `Driver model: ${cfg.driverModel || "unspecified"}`,
+    `Executor model: ${cfg.executorModel}`,
+    `Executor runtime: ${cfg.executorRuntime || "unspecified"}`,
+    "",
+    "Failure signature:",
+    `- tool: ${entry.toolName}`,
+    `- paramsHash: ${entry.paramsHash}`,
+    `- errorHash: ${entry.errorHash}`,
+    `- attempts in window: ${entry.count}`,
+    `- error summary: ${entry.errorSummary}`,
+    "",
+    "Take over the tool work. Do not repeat the exact same tool call that produced this signature. Use a different command, add timeouts, verify assumptions, ask for missing permission if needed, and report the concrete result or next action."
+  ].join("\n");
+  return {
+    sessionKey,
+    idempotencyKey,
+    message,
+    provider: model.provider,
+    model: model.model
+  };
+}
+
 export function shouldBlockRepeatedCall(entry, config, toolName = entry?.toolName) {
   if (!entry) return false;
   const cfg = normalizeConfig(config);
@@ -294,6 +359,15 @@ function normalizeValue(value) {
     out[key] = normalizeValue(value[key]);
   }
   return out;
+}
+
+function normalizeSessionSegment(value) {
+  const normalized = String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9_.:-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+  return normalized || "session";
 }
 
 function stableStringify(value) {

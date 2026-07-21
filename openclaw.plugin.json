@@ -44,6 +44,22 @@
         "type": "string",
         "default": "codex"
       },
+      "handoffEnabled": {
+        "type": "boolean",
+        "default": false
+      },
+      "handoffOnSoftWarn": {
+        "type": "boolean",
+        "default": true
+      },
+      "handoffOnBlock": {
+        "type": "boolean",
+        "default": true
+      },
+      "handoffSessionPrefix": {
+        "type": "string",
+        "default": "loop-guard"
+      },
       "softThreshold": {
         "type": "integer",
         "minimum": 1,

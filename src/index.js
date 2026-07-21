@@ -1,11 +1,13 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import {
+  createHandoffRequest,
   createGuardedToolResult,
   createLoopGuardState,
   createStateRecorder,
   defaultStatePath,
   normalizeConfig,
   shouldBlockRepeatedCall,
+  shouldStartHandoff,
   shouldTreatResultAsFailure,
   withExecutorHint
 } from "./loop.js";
@@ -24,6 +26,7 @@ export default definePluginEntry({
     let config = resolveRuntimeConfig(api);
     const state = createLoopGuardState(config);
     const pendingTimers = new Map();
+    const handoffKeys = new Set();
     const recorder = createStateRecorder({
       statePath: config.statePath || defaultStatePath(),
       logger: api.logger
@@ -65,9 +68,111 @@ export default definePluginEntry({
           toolCallId: event.toolCallId,
           ...entry
         });
+        void maybeStartHandoff("pending-timeout", entry, {
+          runtime: "hook",
+          agentId: ctx.agentId,
+          sessionId: ctx.sessionId,
+          sessionKey: ctx.sessionKey,
+          runId: event.runId ?? ctx.runId,
+          toolCallId: event.toolCallId
+        });
       }, cfg.pendingTimeoutMs);
       timer.unref?.();
       pendingTimers.set(event.toolCallId, timer);
+    };
+
+    const maybeStartHandoff = async (trigger, entry, context) => {
+      const cfg = refreshConfig();
+      if (!shouldStartHandoff(trigger, entry, cfg)) return undefined;
+      if (!api.runtime?.subagent?.run) {
+        recorder.record({ action: "handoff-unavailable", trigger, ...context, ...entry });
+        return undefined;
+      }
+      const request = createHandoffRequest({ trigger, entry, config: cfg, context });
+      if (handoffKeys.has(request.idempotencyKey)) return undefined;
+      handoffKeys.add(request.idempotencyKey);
+      try {
+        const runParams = {
+          sessionKey: request.sessionKey,
+          message: request.message,
+          provider: request.provider,
+          model: request.model,
+          lightContext: true,
+          deliver: false,
+          idempotencyKey: request.idempotencyKey
+        };
+        const result = await api.runtime.subagent.run(runParams);
+        recorder.record({
+          action: "handoff-started",
+          trigger,
+          handoffRunId: result?.runId,
+          handoffSessionKey: request.sessionKey,
+          executorModel: cfg.executorModel,
+          executorRuntime: cfg.executorRuntime,
+          ...context,
+          ...entry
+        });
+        return {
+          runId: result?.runId,
+          sessionKey: request.sessionKey
+        };
+      } catch (error) {
+        const message = String(error?.message || error);
+        if (/override is not authorized|not trusted|not allowlisted/i.test(message)) {
+          try {
+            const fallbackResult = await api.runtime.subagent.run({
+              sessionKey: request.sessionKey,
+              message: `${request.message}\n\nNote: the requested executor model override (${cfg.executorModel}) was rejected by OpenClaw policy, so this fallback handoff is running on the session default model.`,
+              lightContext: true,
+              deliver: false,
+              idempotencyKey: `${request.idempotencyKey}:default-model-fallback`
+            });
+            recorder.record({
+              action: "handoff-started",
+              trigger,
+              handoffRunId: fallbackResult?.runId,
+              handoffSessionKey: request.sessionKey,
+              executorModel: cfg.executorModel,
+              executorRuntime: cfg.executorRuntime,
+              modelOverrideRejected: true,
+              overrideError: message,
+              ...context,
+              ...entry
+            });
+            return {
+              runId: fallbackResult?.runId,
+              sessionKey: request.sessionKey,
+              modelOverrideRejected: true
+            };
+          } catch (fallbackError) {
+            handoffKeys.delete(request.idempotencyKey);
+            recorder.record({
+              action: "handoff-failed",
+              trigger,
+              handoffSessionKey: request.sessionKey,
+              error: String(fallbackError?.message || fallbackError),
+              overrideError: message,
+              ...context,
+              ...entry
+            });
+            api.logger?.warn?.(
+              `loop-guard: fallback handoff failed: ${String(fallbackError?.message || fallbackError)}`
+            );
+            return undefined;
+          }
+        }
+        recorder.record({
+          action: "handoff-failed",
+          trigger,
+          handoffSessionKey: request.sessionKey,
+          error: message,
+          ...context,
+          ...entry
+        });
+        handoffKeys.delete(request.idempotencyKey);
+        api.logger?.warn?.(`loop-guard: handoff failed: ${message}`);
+        return undefined;
+      }
     };
 
     api.on(
@@ -123,10 +228,18 @@ export default definePluginEntry({
           toolCallId: event.toolCallId,
           ...entry
         });
+        const handoff = await maybeStartHandoff("block", entry, {
+          runtime: "hook",
+          agentId: ctx.agentId,
+          sessionId: ctx.sessionId,
+          sessionKey: ctx.sessionKey,
+          runId: event.runId ?? ctx.runId,
+          toolCallId: event.toolCallId
+        });
 
         return {
           block: true,
-          blockReason: `${withExecutorHint(entry.pendingTimeout ? cfg.pendingMessage : cfg.hardMessage, cfg)} Signature: ${entry.toolName} params=${entry.paramsHash} error=${entry.errorHash}.`
+          blockReason: `${withExecutorHint(entry.pendingTimeout ? cfg.pendingMessage : cfg.hardMessage, cfg)} Signature: ${entry.toolName} params=${entry.paramsHash} error=${entry.errorHash}.${handoff ? ` Handoff started: ${handoff.sessionKey} run=${handoff.runId || "unknown"}${handoff.modelOverrideRejected ? " (executor model override rejected; default model fallback)" : ""}.` : ""}`
         };
       },
       { priority: 95, timeoutMs: 2000 }
@@ -157,8 +270,9 @@ export default definePluginEntry({
 
         if (entry.count < cfg.softThreshold) return;
 
+        const action = entry.count >= cfg.hardThreshold ? "warn-hard" : "warn";
         recorder.record({
-          action: entry.count >= cfg.hardThreshold ? "warn-hard" : "warn",
+          action,
           runtime: ctx.runtime,
           agentId: ctx.agentId,
           sessionId: ctx.sessionId,
@@ -167,11 +281,19 @@ export default definePluginEntry({
           toolCallId: event.toolCallId,
           ...entry
         });
+        const handoff = await maybeStartHandoff(action, entry, {
+          runtime: ctx.runtime,
+          agentId: ctx.agentId,
+          sessionId: ctx.sessionId,
+          sessionKey: ctx.sessionKey,
+          runId: ctx.runId,
+          toolCallId: event.toolCallId
+        });
 
         return {
           result: createGuardedToolResult(
             event.result,
-            withExecutorHint(entry.count >= cfg.hardThreshold ? cfg.hardMessage : cfg.softMessage, cfg),
+            `${withExecutorHint(entry.count >= cfg.hardThreshold ? cfg.hardMessage : cfg.softMessage, cfg)}${handoff ? `\n\nLoop Guard started an executor handoff: ${handoff.sessionKey} run=${handoff.runId || "unknown"}${handoff.modelOverrideRejected ? " (executor model override rejected; default model fallback)" : ""}.` : ""}`,
             entry
           )
         };
