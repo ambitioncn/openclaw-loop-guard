@@ -131,6 +131,23 @@ npm test
 npm run check
 ```
 
+## Verified Acceptance
+
+The Feishu slash-command completion path was verified on `nickv100` with OpenClaw `2026.6.11`:
+
+```text
+/loop-guard e2e completion wait=30s
+```
+
+Observed acceptance signal:
+
+- Feishu received the command and dispatched it to the source direct-message session.
+- Loop Guard recorded a `slash-e2e` handoff with a unique `loop-guard-e2e-*` marker.
+- The executor returned `LOOP_GUARD_E2E_COMPLETION_OK <marker>`.
+- The executor report confirmed `requesterSessionKey present: yes` and `expectsCompletionMessage present: yes`.
+- The completion report landed back in the original source session as a `delivery-mirror` assistant message.
+- The expected `no_active_run` wake fallback is logged as `[subagent]` instead of `[warn]`.
+
 ## Current Limits
 
 - This MVP does not kill stuck sessions.
@@ -139,3 +156,9 @@ npm run check
 - Approved handoff resume sends explicit scope rules to the executor session, but OpenClaw 2026.6.11 does not yet enforce per-directory write roots or per-command policy at the tool runtime layer. Treat this as guarded delegation plus audit, not a kernel-level sandbox.
 - Argument previews are best-effort redacted and truncated; set `paramsPreviewMaxChars` to `0` for no params preview.
 - On OpenClaw 2026.6.11, gateway-scoped plugin calls can still reject per-run subagent model overrides even when the plugin entry is allowlisted; Loop Guard records that policy rejection and uses default-model fallback instead.
+- OpenClaw may still log `sessions.patch ... label already in use: plugin:loop-guard` after completion announce. This is a separate label de-duplication issue and does not block completion delivery.
+
+## Next Work
+
+- Upstream the hot-patched `approvalGrant`, `requesterSessionKey`, `expectsCompletionMessage`, and expected wake-fallback logging behavior into OpenClaw core.
+- Clean up the remaining `plugin:loop-guard` session label collision warning.
