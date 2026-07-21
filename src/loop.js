@@ -16,6 +16,23 @@ const DEFAULT_CONFIG = {
   handoffSessionPrefix: "loop-guard",
   handoffToolsAllow: [],
   approvedHandoffToolsAllow: ["read", "exec", "apply_patch"],
+  approvedHandoffWriteRoots: [],
+  approvedHandoffRequireExecTimeout: true,
+  approvedHandoffRiskyPatterns: [
+    "ssh",
+    "scp",
+    "rsync",
+    "systemctl",
+    "service",
+    "sudo",
+    "rm",
+    "mv",
+    "git push",
+    "npm publish",
+    "openclaw update",
+    "models auth",
+    "secrets"
+  ],
   paramsPreviewMaxChars: 1000,
   softThreshold: 2,
   hardThreshold: 3,
@@ -63,6 +80,15 @@ export function normalizeConfig(input = {}) {
   cfg.approvedHandoffToolsAllow = normalizeToolAllowList(
     cfg.approvedHandoffToolsAllow,
     DEFAULT_CONFIG.approvedHandoffToolsAllow
+  );
+  cfg.approvedHandoffWriteRoots = normalizeStringList(
+    cfg.approvedHandoffWriteRoots,
+    DEFAULT_CONFIG.approvedHandoffWriteRoots
+  );
+  cfg.approvedHandoffRequireExecTimeout = cfg.approvedHandoffRequireExecTimeout !== false;
+  cfg.approvedHandoffRiskyPatterns = normalizeStringList(
+    cfg.approvedHandoffRiskyPatterns,
+    DEFAULT_CONFIG.approvedHandoffRiskyPatterns
   );
   cfg.paramsPreviewMaxChars = nonNegativeInt(
     cfg.paramsPreviewMaxChars,
@@ -354,10 +380,22 @@ export function parseApproveArgs(args, defaultTools = DEFAULT_CONFIG.approvedHan
 
   let selector = "latest";
   const tools = [];
+  const writeRoots = [];
+  let confirmRisky = false;
   for (const token of tokens) {
     const toolsMatch = token.match(/^tools=(.*)$/i);
     if (toolsMatch) {
       tools.push(...toolsMatch[1].split(","));
+      continue;
+    }
+    const rootsMatch = token.match(/^(?:roots|writeRoots)=(.*)$/i);
+    if (rootsMatch) {
+      writeRoots.push(...rootsMatch[1].split(","));
+      continue;
+    }
+    const confirmMatch = token.match(/^confirm=(.*)$/i);
+    if (confirmMatch) {
+      confirmRisky = /^(risky|danger|all)$/i.test(confirmMatch[1]);
       continue;
     }
     if (token.toLowerCase() === "latest") {
@@ -369,7 +407,9 @@ export function parseApproveArgs(args, defaultTools = DEFAULT_CONFIG.approvedHan
 
   return {
     selector,
-    toolsAllow: normalizeToolAllowList(tools.length > 0 ? tools : defaultTools)
+    toolsAllow: normalizeToolAllowList(tools.length > 0 ? tools : defaultTools),
+    writeRoots: normalizeStringList(writeRoots),
+    confirmRisky
   };
 }
 
@@ -406,20 +446,39 @@ export function findHandoffEvent(events, selector = "latest") {
   });
 }
 
-export function createApprovedHandoffRequest({ event, config, toolsAllow, approvedAt = Date.now() }) {
+export function createApprovedHandoffRequest({
+  event,
+  config,
+  toolsAllow,
+  writeRoots,
+  confirmRisky = false,
+  approvedAt = Date.now()
+}) {
   const cfg = normalizeConfig(config);
   const modelRef = cfg.executorModel || event?.executorModel || "";
   const model = splitModelRef(modelRef);
   const sessionKey = event?.handoffSessionKey || "";
   const allowedTools = normalizeToolAllowList(toolsAllow, cfg.approvedHandoffToolsAllow);
+  const approvedWriteRoots = normalizeStringList(
+    writeRoots && writeRoots.length > 0 ? writeRoots : cfg.approvedHandoffWriteRoots
+  );
   if (!sessionKey) throw new Error("Missing handoff session key.");
   if (allowedTools.length === 0) throw new Error("Approval requires at least one allowed tool.");
+  const scopeRules = buildApprovedHandoffScopeRules({
+    allowedTools,
+    writeRoots: approvedWriteRoots,
+    requireExecTimeout: cfg.approvedHandoffRequireExecTimeout,
+    riskyPatterns: cfg.approvedHandoffRiskyPatterns,
+    confirmRisky
+  });
   const approvalId = new Date(approvedAt).toISOString().replace(/[:.]/g, "-");
   const idempotencyKey = `loop-guard:approve:${sessionKey}:${event.paramsHash || "params"}:${event.errorHash || "error"}:${approvalId}`;
   const message = [
     "Loop Guard approval received. Continue the existing handoff session with explicitly approved tools.",
     "",
     `Approved tools: ${allowedTools.join(", ")}`,
+    `Approved write roots: ${approvedWriteRoots.length > 0 ? approvedWriteRoots.join(", ") : "none"}`,
+    `Risky operations pre-approved: ${confirmRisky ? "yes" : "no"}`,
     `Executor model: ${modelRef || "session default"}`,
     `Original trigger: ${event.trigger || "unknown"}`,
     `Source agent: ${event.agentId || "unknown"}`,
@@ -438,11 +497,7 @@ export function createApprovedHandoffRequest({ event, config, toolsAllow, approv
     event.paramsPreview ? "```" : "",
     "",
     "Execution rules:",
-    "- Use only the approved tools listed above.",
-    "- Stay within the original failed task and its working directory/path evidence.",
-    "- Do not repeat the exact same failing call. Change strategy or inspect the minimum needed evidence.",
-    "- Keep writes narrowly scoped to the original task. Do not delete files, change secrets, install packages, restart services, or mutate remote hosts unless the original user approval explicitly covered that action.",
-    "- If another approval is needed, stop and say exactly what needs approval.",
+    ...scopeRules,
     "- Return a concise summary of actions taken, files changed, commands run, and remaining risk."
   ].join("\n");
   return {
@@ -450,9 +505,52 @@ export function createApprovedHandoffRequest({ event, config, toolsAllow, approv
     idempotencyKey,
     message,
     toolsAllow: allowedTools,
+    writeRoots: approvedWriteRoots,
+    confirmRisky,
     provider: model.provider,
     model: model.model
   };
+}
+
+export function buildApprovedHandoffScopeRules({
+  allowedTools,
+  writeRoots = [],
+  requireExecTimeout = true,
+  riskyPatterns = DEFAULT_CONFIG.approvedHandoffRiskyPatterns,
+  confirmRisky = false
+}) {
+  const tools = normalizeToolAllowList(allowedTools);
+  const roots = normalizeStringList(writeRoots);
+  const risky = normalizeStringList(riskyPatterns);
+  const rules = [
+    "- Use only the approved tools listed above.",
+    "- Stay within the original failed task and its working directory/path evidence.",
+    "- Do not repeat the exact same failing call. Change strategy or inspect the minimum needed evidence."
+  ];
+  if (tools.includes("exec")) {
+    rules.push(
+      requireExecTimeout
+        ? "- Every exec command must be non-interactive and include an explicit timeout or equivalent bounded execution guard."
+        : "- Exec commands must be non-interactive and bounded."
+    );
+  }
+  if (tools.includes("apply_patch") || tools.includes("write") || tools.includes("edit")) {
+    if (roots.length > 0) {
+      rules.push(`- Writes are approved only under these roots: ${roots.join(", ")}.`);
+      rules.push("- Before writing, verify the target path is inside an approved root.");
+    } else {
+      rules.push("- No write root was approved. Do not write files, even if a write-capable tool is exposed.");
+    }
+  }
+  if (risky.length > 0) {
+    rules.push(
+      confirmRisky
+        ? `- Risky operation patterns were explicitly confirmed for this approval: ${risky.join(", ")}. Still keep them minimal.`
+        : `- These risky operations need separate approval and must not be executed in this run: ${risky.join(", ")}.`
+    );
+  }
+  rules.push("- If another approval is needed, stop and say exactly what needs approval.");
+  return rules;
 }
 
 export function shouldBlockRepeatedCall(entry, config, toolName = entry?.toolName) {
@@ -476,6 +574,19 @@ export function normalizeToolAllowList(value, fallback = []) {
     if (!tool || seen.has(tool)) continue;
     seen.add(tool);
     out.push(tool);
+  }
+  return out;
+}
+
+export function normalizeStringList(value, fallback = []) {
+  const source = Array.isArray(value) ? value : fallback;
+  const seen = new Set();
+  const out = [];
+  for (const item of source || []) {
+    const normalized = String(item || "").trim();
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    out.push(normalized);
   }
   return out;
 }

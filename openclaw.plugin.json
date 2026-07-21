@@ -80,6 +80,41 @@
         ],
         "description": "Default tool allow-list used when a human runs /loop-guard approve latest."
       },
+      "approvedHandoffWriteRoots": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "default": [],
+        "description": "Filesystem roots the approved handoff executor may write under. Empty means no writes are approved."
+      },
+      "approvedHandoffRequireExecTimeout": {
+        "type": "boolean",
+        "default": true,
+        "description": "Require approved executor prompts to use explicit timeouts or bounded guards for exec commands."
+      },
+      "approvedHandoffRiskyPatterns": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "default": [
+          "ssh",
+          "scp",
+          "rsync",
+          "systemctl",
+          "service",
+          "sudo",
+          "rm",
+          "mv",
+          "git push",
+          "npm publish",
+          "openclaw update",
+          "models auth",
+          "secrets"
+        ],
+        "description": "Operation patterns that require separate approval unless the approve command includes confirm=risky."
+      },
       "paramsPreviewMaxChars": {
         "type": "integer",
         "minimum": 0,

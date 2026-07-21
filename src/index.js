@@ -337,7 +337,9 @@ export default definePluginEntry({
             const request = createApprovedHandoffRequest({
               event,
               config: cfg,
-              toolsAllow: approval.toolsAllow
+              toolsAllow: approval.toolsAllow,
+              writeRoots: approval.writeRoots,
+              confirmRisky: approval.confirmRisky
             });
             const runParams = {
               sessionKey: request.sessionKey,
@@ -357,6 +359,8 @@ export default definePluginEntry({
               executorModel: cfg.executorModel,
               executorRuntime: cfg.executorRuntime,
               approvedToolsAllow: request.toolsAllow,
+              approvedWriteRoots: request.writeRoots,
+              approvedConfirmRisky: request.confirmRisky,
               approvedSelector: approval.selector,
               sourceHandoffRunId: event.handoffRunId,
               toolName: event.toolName,

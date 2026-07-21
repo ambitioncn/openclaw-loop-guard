@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildApprovedHandoffScopeRules,
   createApprovedHandoffRequest,
   createHandoffRequest,
   createFailureSignature,
@@ -34,6 +35,10 @@ test("normalizes config thresholds", () => {
   assert.deepEqual(normalizeConfig({ approvedHandoffToolsAllow: [" read ", "read", ""] }).approvedHandoffToolsAllow, [
     "read"
   ]);
+  assert.deepEqual(normalizeConfig({ approvedHandoffWriteRoots: [" /repo ", "/repo", ""] }).approvedHandoffWriteRoots, [
+    "/repo"
+  ]);
+  assert.equal(normalizeConfig({ approvedHandoffRequireExecTimeout: false }).approvedHandoffRequireExecTimeout, false);
   assert.equal(normalizeConfig({ paramsPreviewMaxChars: 120 }).paramsPreviewMaxChars, 120);
 });
 
@@ -294,11 +299,15 @@ test("includes sanitized params preview in handoff request", () => {
 test("parses approve command args with default and explicit tools", () => {
   assert.deepEqual(parseApproveArgs("approve latest", ["read", "exec"]), {
     selector: "latest",
-    toolsAllow: ["read", "exec"]
+    toolsAllow: ["read", "exec"],
+    writeRoots: [],
+    confirmRisky: false
   });
-  assert.deepEqual(parseApproveArgs("approve abc123 tools=read,apply_patch,read", ["exec"]), {
+  assert.deepEqual(parseApproveArgs("approve abc123 tools=read,apply_patch,read roots=/repo,/tmp confirm=risky", ["exec"]), {
     selector: "abc123",
-    toolsAllow: ["read", "apply_patch"]
+    toolsAllow: ["read", "apply_patch"],
+    writeRoots: ["/repo", "/tmp"],
+    confirmRisky: true
   });
 });
 
@@ -331,14 +340,31 @@ test("builds approved handoff request for the same session with approved tools",
       paramsPreview: "{\"cmd\":\"missing\"}"
     },
     config: { executorModel: "openai/gpt-5.5" },
-    toolsAllow: ["read", "exec"]
+    toolsAllow: ["read", "exec", "apply_patch"],
+    writeRoots: ["/repo"]
   });
   assert.equal(request.sessionKey, "agent:main:subagent:loop-guard-source-a-b");
   assert.equal(request.provider, "openai");
   assert.equal(request.model, "gpt-5.5");
-  assert.deepEqual(request.toolsAllow, ["read", "exec"]);
+  assert.deepEqual(request.toolsAllow, ["read", "exec", "apply_patch"]);
+  assert.deepEqual(request.writeRoots, ["/repo"]);
   assert.match(request.idempotencyKey, /^loop-guard:approve:/);
   assert.match(request.message, /Approval received/i);
-  assert.match(request.message, /Approved tools: read, exec/);
+  assert.match(request.message, /Approved tools: read, exec, apply_patch/);
+  assert.match(request.message, /Approved write roots: \/repo/);
+  assert.match(request.message, /Every exec command must be non-interactive and include an explicit timeout/);
+  assert.match(request.message, /Writes are approved only under these roots: \/repo/);
   assert.match(request.message, /"cmd":"missing"/);
+});
+
+test("scope rules forbid writes and risky operations without explicit scope", () => {
+  const rules = buildApprovedHandoffScopeRules({
+    allowedTools: ["read", "exec", "apply_patch"],
+    riskyPatterns: ["ssh", "systemctl"],
+    confirmRisky: false
+  }).join("\n");
+  assert.match(rules, /No write root was approved/);
+  assert.match(rules, /Every exec command/);
+  assert.match(rules, /need separate approval/);
+  assert.match(rules, /ssh, systemctl/);
 });
