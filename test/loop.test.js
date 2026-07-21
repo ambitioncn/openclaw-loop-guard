@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   buildApprovedHandoffScopeRules,
   createApprovedHandoffRequest,
+  createApprovalPrompt,
   createHandoffRequest,
   createFailureSignature,
   createGuardedToolResult,
@@ -276,6 +277,30 @@ test("builds handoff prompt for explicitly allowed tools", () => {
   assert.deepEqual(request.toolsAllow, ["read", "apply_patch"]);
   assert.match(request.message, /only these tools: read, apply_patch/);
   assert.match(request.message, /pre-approved/);
+});
+
+test("builds a human approval prompt for executor handoff", () => {
+  const prompt = createApprovalPrompt({
+    handoff: {
+      sessionKey: "agent:main:subagent:loop-guard-source-a-b",
+      runId: "run-2"
+    },
+    config: {
+      executorModel: "openai/gpt-5.5",
+      approvedHandoffToolsAllow: ["read", "exec", "apply_patch"],
+      approvedHandoffWriteRoots: ["/repo"]
+    },
+    entry: {
+      toolName: "exec",
+      paramsHash: "a",
+      errorHash: "b"
+    }
+  });
+  assert.match(prompt, /Human approval needed/);
+  assert.match(prompt, /\/loop-guard approve latest tools=read,exec,bash,apply_patch roots=\/repo/);
+  assert.match(prompt, /Executor handoff: agent:main:subagent:loop-guard-source-a-b run=run-2/);
+  assert.match(prompt, /Approval grant lifetime after approval: 10 minutes/);
+  assert.match(prompt, /Original failure: exec params=a error=b/);
 });
 
 test("includes sanitized params preview in handoff request", () => {

@@ -1,6 +1,7 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import {
   createApprovedHandoffRequest,
+  createApprovalPrompt,
   createHandoffRequest,
   createGuardedToolResult,
   createLoopGuardState,
@@ -249,7 +250,7 @@ export default definePluginEntry({
 
         return {
           block: true,
-          blockReason: `${withExecutorHint(entry.pendingTimeout ? cfg.pendingMessage : cfg.hardMessage, cfg)} Signature: ${entry.toolName} params=${entry.paramsHash} error=${entry.errorHash}.${handoff ? ` Handoff started: ${handoff.sessionKey} run=${handoff.runId || "unknown"}${handoff.modelOverrideRejected ? " (executor model override rejected; default model fallback)" : ""}.` : ""}`
+          blockReason: `${withExecutorHint(entry.pendingTimeout ? cfg.pendingMessage : cfg.hardMessage, cfg)} Signature: ${entry.toolName} params=${entry.paramsHash} error=${entry.errorHash}.${handoff ? ` Handoff started: ${handoff.sessionKey} run=${handoff.runId || "unknown"}${handoff.modelOverrideRejected ? " (executor model override rejected; default model fallback)" : ""}.\n\n${createApprovalPrompt({ handoff, config: cfg, entry })}` : ""}`
         };
       },
       { priority: 95, timeoutMs: 2000 }
@@ -303,7 +304,7 @@ export default definePluginEntry({
         return {
           result: createGuardedToolResult(
             event.result,
-            `${withExecutorHint(entry.count >= cfg.hardThreshold ? cfg.hardMessage : cfg.softMessage, cfg)}${handoff ? `\n\nLoop Guard started an executor handoff: ${handoff.sessionKey} run=${handoff.runId || "unknown"}${handoff.modelOverrideRejected ? " (executor model override rejected; default model fallback)" : ""}.` : ""}`,
+            `${withExecutorHint(entry.count >= cfg.hardThreshold ? cfg.hardMessage : cfg.softMessage, cfg)}${handoff ? `\n\nLoop Guard started an executor handoff: ${handoff.sessionKey} run=${handoff.runId || "unknown"}${handoff.modelOverrideRejected ? " (executor model override rejected; default model fallback)" : ""}.\n\n${createApprovalPrompt({ handoff, config: cfg, entry })}` : ""}`,
             entry
           )
         };

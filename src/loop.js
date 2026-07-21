@@ -296,6 +296,40 @@ export function withExecutorHint(message, config) {
   return `${message}\n\nConfigured model roles: ${parts.join(", ")}. If the driver is stuck, hand tool execution to the configured executor instead of repeating the same call.`;
 }
 
+export function createApprovalPrompt({ handoff, config, entry }) {
+  if (!handoff?.sessionKey) return "";
+  const cfg = normalizeConfig(config);
+  const tools = normalizeApprovedToolAllowList(cfg.approvedHandoffToolsAllow);
+  const roots = normalizeStringList(cfg.approvedHandoffWriteRoots);
+  const approveCommand = [
+    "/loop-guard approve latest",
+    tools.length > 0 ? `tools=${tools.join(",")}` : "",
+    roots.length > 0 ? `roots=${roots.join(",")}` : "",
+    cfg.approvedHandoffAllowRiskyOperations ? "" : "confirm=safe"
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const risky = cfg.approvedHandoffAllowRiskyOperations ? "yes" : "no";
+  return [
+    "Human approval needed to let the executor continue this task with tools.",
+    "",
+    `Approve command: ${approveCommand}`,
+    `Executor handoff: ${handoff.sessionKey} run=${handoff.runId || "unknown"}`,
+    `Executor model: ${cfg.executorModel || "session default"}`,
+    `Approved tools if sent: ${tools.length > 0 ? tools.join(", ") : "none"}`,
+    `Approved write roots if sent: ${roots.length > 0 ? roots.join(", ") : "none"}`,
+    `Risky operations included if sent: ${risky}`,
+    "Approval grant lifetime after approval: 10 minutes",
+    entry
+      ? `Original failure: ${entry.toolName} params=${entry.paramsHash} error=${entry.errorHash}`
+      : "",
+    "",
+    "Only ask the human to send this command if continuing the same failed task is still useful. If the task changed or the scope is unclear, ask for a fresh approval instead."
+  ]
+    .filter((line) => line !== "")
+    .join("\n");
+}
+
 export function shouldStartHandoff(trigger, entry, config) {
   const cfg = normalizeConfig(config);
   if (!cfg.enabled || !cfg.handoffEnabled || !cfg.executorModel || !entry) return false;

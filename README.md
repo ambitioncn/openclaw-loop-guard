@@ -27,6 +27,7 @@ The first implementation is deliberately small:
 - Automatic handoff is opt-in with `handoffEnabled`; when enabled, Loop Guard starts a plugin-owned subagent run using `executorModel` and records the handoff session/run ids.
 - Handoff prompts include a bounded, redacted preview of the failed tool arguments so the executor can work from the actual failed call instead of guessing from hashes.
 - Handoff passes `handoffToolsAllow` through to the plugin-owned subagent. The default is `[]`, so background handoffs run in no-tool diagnostic mode instead of relying only on prompt wording.
+- When a handoff starts, Loop Guard adds a human-facing approval hint to the guarded tool result. It includes the exact `/loop-guard approve latest ...` command, executor session/run, approved tools, write roots, risky-operation status, and the 10 minute grant lifetime.
 - Approved handoff resume is available with `/loop-guard approve latest`. It reuses the last handoff session and sends an explicitly approved `toolsAllow` list, defaulting to `approvedHandoffToolsAllow`.
 - Approved handoff resume also includes scope rules: write roots, exec timeout requirements, and risky-operation patterns. A human approval is enough to authorize risky operations by default.
 
