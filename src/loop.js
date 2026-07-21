@@ -14,6 +14,7 @@ const DEFAULT_CONFIG = {
   handoffOnSoftWarn: true,
   handoffOnBlock: true,
   handoffSessionPrefix: "loop-guard",
+  handoffToolsAllow: [],
   paramsPreviewMaxChars: 1000,
   softThreshold: 2,
   hardThreshold: 3,
@@ -54,6 +55,9 @@ export function normalizeConfig(input = {}) {
   cfg.handoffSessionPrefix = normalizeSessionSegment(
     cfg.handoffSessionPrefix || DEFAULT_CONFIG.handoffSessionPrefix
   );
+  cfg.handoffToolsAllow = Array.isArray(cfg.handoffToolsAllow)
+    ? cfg.handoffToolsAllow.map((tool) => String(tool).trim()).filter(Boolean)
+    : [...DEFAULT_CONFIG.handoffToolsAllow];
   cfg.paramsPreviewMaxChars = nonNegativeInt(
     cfg.paramsPreviewMaxChars,
     DEFAULT_CONFIG.paramsPreviewMaxChars
@@ -284,6 +288,22 @@ export function createHandoffRequest({ trigger, entry, config, context = {} }) {
   const sessionKey = `agent:${agentId}:subagent:${cfg.handoffSessionPrefix}-${sourceSession}-${entry.paramsHash}-${entry.errorHash}`;
   const model = splitModelRef(cfg.executorModel);
   const idempotencyKey = `loop-guard:${trigger}:${sessionKey}:${entry.key}`;
+  const toolMode =
+    cfg.handoffToolsAllow.length === 0
+      ? [
+          "- Core should expose no tools to this run (`toolsAllow=[]`). Do not call tools.",
+          "- Use the sanitized params preview and error summary as the evidence. Do not go hunting through unrelated repositories.",
+          "- Do not retry the original operation, even with a changed command. The parent agent already proved the failure.",
+          "- Return a concise handoff report with: likely cause, why repeating is unproductive, and the next safe action for the parent agent or human.",
+          "- If the next safe action needs live tool execution or permission, say so directly instead of attempting it."
+        ]
+      : [
+          `- Core should expose only these tools: ${cfg.handoffToolsAllow.join(", ")}.`,
+          "- Stay inside the failed call's working directory or the explicitly provided path. Do not inspect unrelated repositories.",
+          "- Do not repeat the exact same failing tool call. Change the strategy, add a timeout, or inspect only the minimum evidence needed.",
+          "- Treat writes, package installs, service restarts, SSH mutations, secret changes, and deletes as needing explicit approval unless the handoff request says they are pre-approved.",
+          "- Return the concrete result, the diff/commands used when applicable, and the next safe action."
+        ];
   const message = [
     "Loop Guard is handing off a stuck or repeated tool-execution problem.",
     "",
@@ -307,16 +327,13 @@ export function createHandoffRequest({ trigger, entry, config, context = {} }) {
     entry.paramsPreview ? "```" : "",
     "",
     "Executor instructions:",
-    "- This background handoff has no interactive approval channel. Do not call tools in this run.",
-    "- Use the sanitized params preview and error summary as the evidence. Do not go hunting through unrelated repositories.",
-    "- Do not retry the original operation, even with a changed command. The parent agent already proved the failure.",
-    "- Return a concise handoff report with: likely cause, why repeating is unproductive, and the next safe action for the parent agent or human.",
-    "- If the next safe action needs live tool execution or permission, say so directly instead of attempting it."
+    ...toolMode
   ].join("\n");
   return {
     sessionKey,
     idempotencyKey,
     message,
+    toolsAllow: cfg.handoffToolsAllow,
     provider: model.provider,
     model: model.model
   };

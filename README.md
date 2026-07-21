@@ -26,7 +26,7 @@ The first implementation is deliberately small:
 - Model roles are configurable with `driverModel`, `executorModel`, and `executorRuntime`; the plugin never hard-codes Qwen, GPT, or Claude.
 - Automatic handoff is opt-in with `handoffEnabled`; when enabled, Loop Guard starts a plugin-owned subagent run using `executorModel` and records the handoff session/run ids.
 - Handoff prompts include a bounded, redacted preview of the failed tool arguments so the executor can work from the actual failed call instead of guessing from hashes.
-- Handoff prompts run in no-tool diagnostic mode by default because plugin-owned background subagents currently have no interactive approval channel; this avoids silent approval waits.
+- Handoff passes `handoffToolsAllow` through to the plugin-owned subagent. The default is `[]`, so background handoffs run in no-tool diagnostic mode instead of relying only on prompt wording.
 
 Hard blocking is disabled by default while the plugin is being proven on real OpenClaw sessions.
 With the default config, repeated failures are still rewritten with model-visible guidance.
@@ -66,6 +66,7 @@ Enable it explicitly in `openclaw.json` if your OpenClaw install requires plugin
           "handoffEnabled": true,
           "handoffOnSoftWarn": true,
           "handoffOnBlock": true,
+          "handoffToolsAllow": [],
           "paramsPreviewMaxChars": 1000,
           "softThreshold": 2,
           "hardThreshold": 3,
@@ -106,6 +107,6 @@ npm run check
 
 - This MVP does not kill stuck sessions.
 - Handoff runs in a plugin-owned background subagent session; it does not yet merge the executor's result back into the active driver turn.
-- Handoff currently produces a diagnostic report instead of doing live executor tool calls; OpenClaw needs a non-interactive approval/tool-policy surface before plugin-owned Codex subagents can safely execute tools unattended.
+- Handoff currently produces a diagnostic report by default because `handoffToolsAllow` defaults to `[]`. Set a narrow allow-list only when that executor run has been explicitly approved for tool execution.
 - Argument previews are best-effort redacted and truncated; set `paramsPreviewMaxChars` to `0` for no params preview.
 - On OpenClaw 2026.6.11, gateway-scoped plugin calls can still reject per-run subagent model overrides even when the plugin entry is allowlisted; Loop Guard records that policy rejection and uses default-model fallback instead.

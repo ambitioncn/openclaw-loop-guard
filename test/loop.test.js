@@ -24,6 +24,10 @@ test("normalizes config thresholds", () => {
   assert.equal(normalizeConfig({ pendingTimeoutMs: 0 }).pendingTimeoutMs, 0);
   assert.equal(normalizeConfig({ driverModel: " qwen ", executorModel: " gpt " }).driverModel, "qwen");
   assert.equal(normalizeConfig({ handoffEnabled: true }).handoffEnabled, true);
+  assert.deepEqual(normalizeConfig({ handoffToolsAllow: [" read ", 1, ""] }).handoffToolsAllow, [
+    "read",
+    "1"
+  ]);
   assert.equal(normalizeConfig({ paramsPreviewMaxChars: 120 }).paramsPreviewMaxChars, 120);
 });
 
@@ -229,10 +233,35 @@ test("builds subagent handoff request from configured executor", () => {
   assert.equal(request.provider, "openai");
   assert.equal(request.model, "gpt-5.5");
   assert.match(request.sessionKey, /^agent:main:subagent:loop-guard-/);
+  assert.deepEqual(request.toolsAllow, []);
   assert.match(request.message, /Executor instructions/);
-  assert.match(request.message, /Do not call tools/);
-  assert.match(request.message, /approval/);
+  assert.match(request.message, /toolsAllow=\[\]/);
+  assert.match(request.message, /permission/);
   assert.match(request.idempotencyKey, /loop-guard:warn:/);
+});
+
+test("builds handoff prompt for explicitly allowed tools", () => {
+  const entry = {
+    key: "exec:a:b",
+    count: 2,
+    toolName: "exec",
+    paramsHash: "a",
+    errorHash: "b",
+    errorSummary: "not found"
+  };
+  const request = createHandoffRequest({
+    trigger: "warn",
+    entry,
+    config: {
+      handoffEnabled: true,
+      executorModel: "openai/gpt-5.5",
+      handoffToolsAllow: ["read", "apply_patch"]
+    },
+    context: { agentId: "main" }
+  });
+  assert.deepEqual(request.toolsAllow, ["read", "apply_patch"]);
+  assert.match(request.message, /only these tools: read, apply_patch/);
+  assert.match(request.message, /pre-approved/);
 });
 
 test("includes sanitized params preview in handoff request", () => {

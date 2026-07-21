@@ -40,6 +40,13 @@ const secondReplacement = `\t\t\t}, {
 \t\t\t\t...allowSyntheticModelOverride ? { forceSyntheticClient: true } : {},
 \t\t\t\tagentRunTracking: "plugin_subagent",`;
 
+const thirdNeedle = `\t\t\t\t...allowOverride && params.model && { model: params.model },
+\t\t\t\t...params.extraSystemPrompt && { extraSystemPrompt: params.extraSystemPrompt },`;
+
+const thirdReplacement = `\t\t\t\t...allowOverride && params.model && { model: params.model },
+\t\t\t\t...Array.isArray(params.toolsAllow) && { toolsAllow: params.toolsAllow },
+\t\t\t\t...params.extraSystemPrompt && { extraSystemPrompt: params.extraSystemPrompt },`;
+
 function timestamp() {
   return new Date().toISOString().replace(/[-:]/g, "").replace(/\..+/, "");
 }
@@ -54,6 +61,7 @@ function patchFile(file) {
   const alreadySecond = text.includes(
     'forceSyntheticClient: true } : {},\n\t\t\t\tagentRunTracking: "plugin_subagent"'
   );
+  const alreadyThird = text.includes("...Array.isArray(params.toolsAllow) && { toolsAllow: params.toolsAllow },");
 
   if (!alreadyFirst) {
     if (!text.includes(firstNeedle)) {
@@ -69,13 +77,39 @@ function patchFile(file) {
     text = text.replace(secondNeedle, secondReplacement);
   }
 
-  if (alreadyFirst && alreadySecond) {
+  if (!alreadyThird) {
+    if (!text.includes(thirdNeedle)) {
+      throw new Error(`expected agent params block not found in ${file}`);
+    }
+    text = text.replace(thirdNeedle, thirdReplacement);
+  }
+
+  if (alreadyFirst && alreadySecond && alreadyThird) {
     return { file, status: "already-patched" };
   }
 
   const backup = `${file}.bak-loop-guard-subagent-override-${timestamp()}`;
   fs.copyFileSync(file, backup);
   fs.writeFileSync(file, text);
+  return { file, backup, status: "patched" };
+}
+
+function patchSchemaFile(file) {
+  let text = fs.readFileSync(file, "utf8");
+  if (!text.includes("const AgentParamsSchema = Type.Object({")) return null;
+  const schemaNeedle = `\tmodel: Type.Optional(Type.String()),
+\tto: Type.Optional(Type.String()),`;
+  const schemaReplacement = `\tmodel: Type.Optional(Type.String()),
+\ttoolsAllow: Type.Optional(Type.Array(Type.String())),
+\tto: Type.Optional(Type.String()),`;
+  const alreadyPatched = text.includes("toolsAllow: Type.Optional(Type.Array(Type.String())),");
+  if (alreadyPatched) return { file, status: "already-patched" };
+  if (!text.includes(schemaNeedle)) {
+    throw new Error(`expected AgentParamsSchema model/to block not found in ${file}`);
+  }
+  const backup = `${file}.bak-loop-guard-agent-tools-allow-${timestamp()}`;
+  fs.copyFileSync(file, backup);
+  fs.writeFileSync(file, text.replace(schemaNeedle, schemaReplacement));
   return { file, backup, status: "patched" };
 }
 
@@ -89,8 +123,14 @@ const results = fs
   .map((name) => patchFile(path.join(dist, name)))
   .filter(Boolean);
 
-if (results.length === 0) {
-  throw new Error(`No server-plugins file containing the subagent override gate was found in ${dist}`);
+const schemaResults = fs
+  .readdirSync(dist)
+  .filter((name) => /^schema-.*\.js$/.test(name))
+  .map((name) => patchSchemaFile(path.join(dist, name)))
+  .filter(Boolean);
+
+if (results.length === 0 && schemaResults.length === 0) {
+  throw new Error(`No OpenClaw dist files containing the subagent override gate or AgentParamsSchema were found in ${dist}`);
 }
 
-console.log(JSON.stringify(results, null, 2));
+console.log(JSON.stringify([...results, ...schemaResults], null, 2));

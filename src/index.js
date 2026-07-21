@@ -97,6 +97,7 @@ export default definePluginEntry({
           message: request.message,
           provider: request.provider,
           model: request.model,
+          toolsAllow: request.toolsAllow,
           lightContext: true,
           deliver: false,
           idempotencyKey: request.idempotencyKey
@@ -123,6 +124,7 @@ export default definePluginEntry({
             const fallbackResult = await api.runtime.subagent.run({
               sessionKey: request.sessionKey,
               message: `${request.message}\n\nNote: the requested executor model override (${cfg.executorModel}) was rejected by OpenClaw policy, so this fallback handoff is running on the session default model.`,
+              toolsAllow: request.toolsAllow,
               lightContext: true,
               deliver: false,
               idempotencyKey: `${request.idempotencyKey}:default-model-fallback`

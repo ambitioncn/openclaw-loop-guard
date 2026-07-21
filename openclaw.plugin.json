@@ -60,6 +60,14 @@
         "type": "string",
         "default": "loop-guard"
       },
+      "handoffToolsAllow": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "default": [],
+        "description": "Tool allow-list passed to the plugin-owned handoff subagent. Empty means no tools are exposed."
+      },
       "paramsPreviewMaxChars": {
         "type": "integer",
         "minimum": 0,
