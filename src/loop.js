@@ -4,6 +4,7 @@ import path from "node:path";
 
 const DEFAULT_CONFIG = {
   enabled: true,
+  blockRepeatedCalls: false,
   softThreshold: 2,
   hardThreshold: 3,
   windowMs: 10 * 60 * 1000,
@@ -29,6 +30,7 @@ const VOLATILE_KEYS = new Set([
 export function normalizeConfig(input = {}) {
   const cfg = { ...DEFAULT_CONFIG, ...(isObject(input) ? input : {}) };
   cfg.enabled = cfg.enabled !== false;
+  cfg.blockRepeatedCalls = cfg.blockRepeatedCalls === true;
   cfg.softThreshold = positiveInt(cfg.softThreshold, DEFAULT_CONFIG.softThreshold);
   cfg.hardThreshold = Math.max(
     cfg.softThreshold,
@@ -181,6 +183,17 @@ export function createGuardedToolResult(originalResult, message, entry) {
       }
     }
   };
+}
+
+export function shouldBlockRepeatedCall(entry, config, toolName = entry?.toolName) {
+  if (!entry) return false;
+  const cfg = normalizeConfig(config);
+  if (!cfg.blockRepeatedCalls) return false;
+  const normalizedToolName = String(toolName || entry.toolName || "unknown");
+  const threshold = cfg.highRiskTools.includes(normalizedToolName)
+    ? Math.min(cfg.softThreshold, cfg.hardThreshold)
+    : cfg.hardThreshold;
+  return entry.count >= threshold;
 }
 
 export function createStateRecorder({ statePath, logger } = {}) {

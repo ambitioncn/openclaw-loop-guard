@@ -5,6 +5,7 @@ import {
   createStateRecorder,
   defaultStatePath,
   normalizeConfig,
+  shouldBlockRepeatedCall,
   shouldTreatResultAsFailure
 } from "./loop.js";
 
@@ -71,10 +72,7 @@ export default definePluginEntry({
         });
         if (!entry) return;
 
-        const hardThreshold = cfg.highRiskTools.includes(event.toolName)
-          ? Math.min(cfg.softThreshold, cfg.hardThreshold)
-          : cfg.hardThreshold;
-        if (entry.count < hardThreshold) return;
+        if (!shouldBlockRepeatedCall(entry, cfg, event.toolName)) return;
 
         recorder.record({
           action: "block",

@@ -5,6 +5,7 @@ import {
   createGuardedToolResult,
   createLoopGuardState,
   normalizeConfig,
+  shouldBlockRepeatedCall,
   shouldTreatResultAsFailure
 } from "../src/loop.js";
 
@@ -13,6 +14,8 @@ test("normalizes config thresholds", () => {
     normalizeConfig({ softThreshold: 3, hardThreshold: 2 }).hardThreshold,
     3
   );
+  assert.equal(normalizeConfig({ blockRepeatedCalls: true }).blockRepeatedCalls, true);
+  assert.equal(normalizeConfig({ blockRepeatedCalls: "true" }).blockRepeatedCalls, false);
 });
 
 test("creates stable signatures without volatile ids", () => {
@@ -83,4 +86,25 @@ test("wraps repeated failure results with model-visible guidance", () => {
   assert.equal(result.isError, true);
   assert.match(result.content[0].text, /change strategy/);
   assert.equal(result.details.loopGuard.count, 2);
+});
+
+test("does not hard-block repeated calls unless explicitly enabled", () => {
+  const entry = { count: 3, toolName: "exec" };
+  assert.equal(shouldBlockRepeatedCall(entry, { hardThreshold: 3 }, "exec"), false);
+  assert.equal(
+    shouldBlockRepeatedCall(entry, { blockRepeatedCalls: true, hardThreshold: 3 }, "exec"),
+    true
+  );
+});
+
+test("uses soft threshold for high-risk tools when hard blocking is enabled", () => {
+  const entry = { count: 2, toolName: "exec" };
+  assert.equal(
+    shouldBlockRepeatedCall(
+      entry,
+      { blockRepeatedCalls: true, softThreshold: 2, hardThreshold: 4 },
+      "exec"
+    ),
+    true
+  );
 });

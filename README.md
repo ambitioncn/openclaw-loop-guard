@@ -8,7 +8,7 @@ It is intended for local-model deployments where a capable reasoning model is us
 
 - Observes tool failures with `after_tool_call`.
 - Rewrites repeated failure results with `agentToolResultMiddleware`.
-- Blocks unproductive repeat calls with `before_tool_call`.
+- Optionally blocks unproductive repeat calls with `before_tool_call`.
 - Stores lightweight audit events outside the session transcript.
 - Provides a `/loop-guard` command for status and reset.
 
@@ -18,8 +18,11 @@ The first implementation is deliberately small:
 
 - First failure: return normally.
 - Second matching failure: tell the model to choose another strategy.
-- Third matching failure: block the same call.
-- High-risk tools can be blocked at the soft threshold.
+- Third matching failure: can block the same call when `blockRepeatedCalls` is enabled.
+- High-risk tools can be blocked at the soft threshold when hard blocking is enabled.
+
+Hard blocking is disabled by default while the plugin is being proven on real OpenClaw sessions.
+With the default config, repeated failures are still rewritten with model-visible guidance.
 
 Failure identity is based on:
 
@@ -47,6 +50,7 @@ Enable it explicitly in `openclaw.json` if your OpenClaw install requires plugin
         "enabled": true,
         "config": {
           "enabled": true,
+          "blockRepeatedCalls": false,
           "softThreshold": 2,
           "hardThreshold": 3,
           "windowMs": 600000,

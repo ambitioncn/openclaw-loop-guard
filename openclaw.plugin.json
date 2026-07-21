@@ -19,6 +19,10 @@
         "type": "boolean",
         "default": true
       },
+      "blockRepeatedCalls": {
+        "type": "boolean",
+        "default": false
+      },
       "softThreshold": {
         "type": "integer",
         "minimum": 1,
