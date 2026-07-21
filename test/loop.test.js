@@ -9,6 +9,7 @@ import {
   createLoopGuardState,
   createParamsPreview,
   findHandoffEvent,
+  normalizeApprovedToolAllowList,
   normalizeConfig,
   parseApproveArgs,
   shouldBlockRepeatedCall,
@@ -301,7 +302,7 @@ test("includes sanitized params preview in handoff request", () => {
 test("parses approve command args with default and explicit tools", () => {
   assert.deepEqual(parseApproveArgs("approve latest", ["read", "exec"]), {
     selector: "latest",
-    toolsAllow: ["read", "exec"],
+    toolsAllow: ["read", "exec", "bash"],
     writeRoots: [],
     confirmRisky: true
   });
@@ -348,11 +349,11 @@ test("builds approved handoff request for the same session with approved tools",
   assert.equal(request.sessionKey, "agent:main:subagent:loop-guard-source-a-b");
   assert.equal(request.provider, "openai");
   assert.equal(request.model, "gpt-5.5");
-  assert.deepEqual(request.toolsAllow, ["read", "exec", "apply_patch"]);
+  assert.deepEqual(request.toolsAllow, ["read", "exec", "bash", "apply_patch"]);
   assert.deepEqual(request.writeRoots, ["/repo"]);
   assert.match(request.idempotencyKey, /^loop-guard:approve:/);
   assert.match(request.message, /Approval received/i);
-  assert.match(request.message, /Approved tools: read, exec, apply_patch/);
+  assert.match(request.message, /Approved tools: read, exec, bash, apply_patch/);
   assert.match(request.message, /Approved write roots: \/repo/);
   assert.match(request.message, /Risky operations approved by this approval: yes/);
   assert.match(request.message, /Every exec command must be non-interactive and include an explicit timeout/);
@@ -380,4 +381,14 @@ test("approved handoff can allow risky operations by default", () => {
   }).join("\n");
   assert.match(rules, /approved by this approval/);
   assert.doesNotMatch(rules, /need separate approval/);
+});
+
+test("approved exec allow-list also exposes codex bash tool", () => {
+  assert.deepEqual(normalizeApprovedToolAllowList(["read", "exec", "apply_patch"]), [
+    "read",
+    "exec",
+    "bash",
+    "apply_patch"
+  ]);
+  assert.deepEqual(normalizeApprovedToolAllowList(["bash", "read"]), ["bash", "read"]);
 });

@@ -72,13 +72,17 @@ export default definePluginEntry({
           toolCallId: event.toolCallId,
           ...entry
         });
-        void maybeStartHandoff("pending-timeout", entry, {
+        recorder.record({
+          action: "handoff-skipped",
+          reason: "pending-timeout timer has no gateway request scope",
+          trigger: "pending-timeout",
           runtime: "hook",
           agentId: ctx.agentId,
           sessionId: ctx.sessionId,
           sessionKey: ctx.sessionKey,
           runId: event.runId ?? ctx.runId,
-          toolCallId: event.toolCallId
+          toolCallId: event.toolCallId,
+          ...entry
         });
       }, cfg.pendingTimeoutMs);
       timer.unref?.();

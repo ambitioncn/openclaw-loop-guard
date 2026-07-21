@@ -76,6 +76,7 @@
         "default": [
           "read",
           "exec",
+          "bash",
           "apply_patch"
         ],
         "description": "Default tool allow-list used when a human runs /loop-guard approve latest."
@@ -156,6 +157,7 @@
         },
         "default": [
           "exec",
+          "bash",
           "apply_patch",
           "write",
           "edit"

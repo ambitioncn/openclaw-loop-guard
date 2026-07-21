@@ -69,7 +69,7 @@ Enable it explicitly in `openclaw.json` if your OpenClaw install requires plugin
           "handoffOnSoftWarn": true,
           "handoffOnBlock": true,
           "handoffToolsAllow": [],
-          "approvedHandoffToolsAllow": ["read", "exec", "apply_patch"],
+          "approvedHandoffToolsAllow": ["read", "exec", "bash", "apply_patch"],
           "approvedHandoffWriteRoots": [],
           "approvedHandoffAllowRiskyOperations": true,
           "approvedHandoffRequireExecTimeout": true,
@@ -78,7 +78,7 @@ Enable it explicitly in `openclaw.json` if your OpenClaw install requires plugin
           "softThreshold": 2,
           "hardThreshold": 3,
           "windowMs": 600000,
-          "highRiskTools": ["exec", "apply_patch", "write", "edit"]
+          "highRiskTools": ["exec", "bash", "apply_patch", "write", "edit"]
         },
         "subagent": {
           "allowModelOverride": true,
@@ -102,12 +102,14 @@ If OpenClaw rejects the per-run model override despite that policy, Loop Guard f
 /loop-guard
 /loop-guard reset
 /loop-guard approve latest
-/loop-guard approve latest tools=read,exec,apply_patch
-/loop-guard approve latest tools=read,exec,apply_patch roots=/path/to/repo
-/loop-guard approve latest tools=read,exec roots=/path/to/repo confirm=safe
+/loop-guard approve latest tools=read,exec,bash,apply_patch
+/loop-guard approve latest tools=read,exec,bash,apply_patch roots=/path/to/repo
+/loop-guard approve latest tools=read,exec,bash roots=/path/to/repo confirm=safe
 ```
 
 `approve` looks up the most recent `handoff-started` audit event and continues that same executor session with approved tools. A selector can replace `latest`; it matches the handoff session key, run id, source run id, tool name, params hash, or error hash.
+
+For Codex executors, Loop Guard expands approved `exec` to include `bash`, because Codex exposes shell execution as `bash`.
 
 By default, write-capable tools are not enough to authorize writes. The approval must provide `roots=...` or config must set `approvedHandoffWriteRoots`. `exec` approvals tell the executor to use explicit timeouts/bounds. Risky patterns such as SSH, service restarts, deletes, pushes, publishing, and secret/auth changes are allowed once the human approves the handoff. Use `confirm=safe` for a one-off approval that should still deny risky operations.
 

@@ -15,7 +15,7 @@ const DEFAULT_CONFIG = {
   handoffOnBlock: true,
   handoffSessionPrefix: "loop-guard",
   handoffToolsAllow: [],
-  approvedHandoffToolsAllow: ["read", "exec", "apply_patch"],
+  approvedHandoffToolsAllow: ["read", "exec", "bash", "apply_patch"],
   approvedHandoffWriteRoots: [],
   approvedHandoffAllowRiskyOperations: true,
   approvedHandoffRequireExecTimeout: true,
@@ -39,7 +39,7 @@ const DEFAULT_CONFIG = {
   hardThreshold: 3,
   windowMs: 10 * 60 * 1000,
   maxEntries: 500,
-  highRiskTools: ["exec", "apply_patch", "write", "edit"],
+  highRiskTools: ["exec", "bash", "apply_patch", "write", "edit"],
   softMessage:
     "Loop Guard: this tool call has failed repeatedly with the same error. Do not retry the same call. Choose a different strategy, change the command/arguments, ask for missing permission, or escalate to a more reliable executor.",
   hardMessage:
@@ -409,7 +409,7 @@ export function parseApproveArgs(args, defaultTools = DEFAULT_CONFIG.approvedHan
 
   return {
     selector,
-    toolsAllow: normalizeToolAllowList(tools.length > 0 ? tools : defaultTools),
+    toolsAllow: normalizeApprovedToolAllowList(tools.length > 0 ? tools : defaultTools),
     writeRoots: normalizeStringList(writeRoots),
     confirmRisky
   };
@@ -460,7 +460,7 @@ export function createApprovedHandoffRequest({
   const modelRef = cfg.executorModel || event?.executorModel || "";
   const model = splitModelRef(modelRef);
   const sessionKey = event?.handoffSessionKey || "";
-  const allowedTools = normalizeToolAllowList(toolsAllow, cfg.approvedHandoffToolsAllow);
+  const allowedTools = normalizeApprovedToolAllowList(toolsAllow, cfg.approvedHandoffToolsAllow);
   const approvedWriteRoots = normalizeStringList(
     writeRoots && writeRoots.length > 0 ? writeRoots : cfg.approvedHandoffWriteRoots
   );
@@ -579,6 +579,12 @@ export function normalizeToolAllowList(value, fallback = []) {
     out.push(tool);
   }
   return out;
+}
+
+export function normalizeApprovedToolAllowList(value, fallback = []) {
+  const tools = normalizeToolAllowList(value, fallback);
+  if (tools.includes("exec") && !tools.includes("bash")) tools.splice(tools.indexOf("exec") + 1, 0, "bash");
+  return tools;
 }
 
 export function normalizeStringList(value, fallback = []) {
