@@ -5,6 +5,7 @@ import {
   createFailureSignature,
   createGuardedToolResult,
   createLoopGuardState,
+  createParamsPreview,
   normalizeConfig,
   shouldBlockRepeatedCall,
   shouldStartHandoff,
@@ -23,6 +24,7 @@ test("normalizes config thresholds", () => {
   assert.equal(normalizeConfig({ pendingTimeoutMs: 0 }).pendingTimeoutMs, 0);
   assert.equal(normalizeConfig({ driverModel: " qwen ", executorModel: " gpt " }).driverModel, "qwen");
   assert.equal(normalizeConfig({ handoffEnabled: true }).handoffEnabled, true);
+  assert.equal(normalizeConfig({ paramsPreviewMaxChars: 120 }).paramsPreviewMaxChars, 120);
 });
 
 test("creates stable signatures without volatile ids", () => {
@@ -37,6 +39,29 @@ test("creates stable signatures without volatile ids", () => {
     error: "Permission denied"
   });
   assert.equal(a.key, b.key);
+});
+
+test("adds redacted bounded params previews to failures", () => {
+  const preview = createParamsPreview(
+    {
+      cmd: "curl -H 'Authorization: Bearer sk-secret1234567890' https://example.test",
+      token: "npm_secret1234567890",
+      toolCallId: "volatile"
+    },
+    120
+  );
+  assert.match(preview, /"token":"\[redacted\]"/);
+  assert.doesNotMatch(preview, /sk-secret1234567890/);
+  assert.doesNotMatch(preview, /npm_secret1234567890/);
+
+  const state = createLoopGuardState({ paramsPreviewMaxChars: 20 });
+  const entry = state.observeFailure({
+    toolName: "exec",
+    params: { cmd: "definitely_missing_command --with-long-argument" },
+    error: "not found"
+  });
+  assert.match(entry.paramsPreview, /truncated/);
+  assert.ok(entry.paramsPreview.length <= 35);
 });
 
 test("tracks repeated failures inside a window", () => {
@@ -204,6 +229,29 @@ test("builds subagent handoff request from configured executor", () => {
   assert.equal(request.provider, "openai");
   assert.equal(request.model, "gpt-5.5");
   assert.match(request.sessionKey, /^agent:main:subagent:loop-guard-/);
-  assert.match(request.message, /Take over the tool work/);
+  assert.match(request.message, /Executor instructions/);
+  assert.match(request.message, /Do not call tools/);
+  assert.match(request.message, /approval/);
   assert.match(request.idempotencyKey, /loop-guard:warn:/);
+});
+
+test("includes sanitized params preview in handoff request", () => {
+  const entry = {
+    key: "exec:a:b",
+    count: 2,
+    toolName: "exec",
+    paramsHash: "a",
+    errorHash: "b",
+    errorSummary: "not found",
+    paramsPreview: '{"cmd":"definitely_missing_command","token":"[redacted]"}'
+  };
+  const request = createHandoffRequest({
+    trigger: "warn",
+    entry,
+    config: { handoffEnabled: true, executorModel: "openai/gpt-5.5" },
+    context: { agentId: "main" }
+  });
+  assert.match(request.message, /sanitized params preview/);
+  assert.match(request.message, /definitely_missing_command/);
+  assert.match(request.message, /"token":"\[redacted\]"/);
 });

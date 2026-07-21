@@ -14,6 +14,7 @@ const DEFAULT_CONFIG = {
   handoffOnSoftWarn: true,
   handoffOnBlock: true,
   handoffSessionPrefix: "loop-guard",
+  paramsPreviewMaxChars: 1000,
   softThreshold: 2,
   hardThreshold: 3,
   windowMs: 10 * 60 * 1000,
@@ -52,6 +53,10 @@ export function normalizeConfig(input = {}) {
   cfg.handoffOnBlock = cfg.handoffOnBlock !== false;
   cfg.handoffSessionPrefix = normalizeSessionSegment(
     cfg.handoffSessionPrefix || DEFAULT_CONFIG.handoffSessionPrefix
+  );
+  cfg.paramsPreviewMaxChars = nonNegativeInt(
+    cfg.paramsPreviewMaxChars,
+    DEFAULT_CONFIG.paramsPreviewMaxChars
   );
   cfg.softThreshold = positiveInt(cfg.softThreshold, DEFAULT_CONFIG.softThreshold);
   cfg.hardThreshold = Math.max(
@@ -98,7 +103,10 @@ export function createLoopGuardState(config = {}) {
 
   function observeFailure(input, now = Date.now()) {
     sweep(now);
-    const signature = createFailureSignature(input);
+    const signature = createFailureSignature({
+      ...input,
+      paramsPreviewMaxChars: cfg.paramsPreviewMaxChars
+    });
     const observationId = input.observationId ? `${signature.key}:${String(input.observationId)}` : "";
     if (observationId && observationIds.has(observationId)) {
       const existing = entries.get(signature.key);
@@ -135,7 +143,10 @@ export function createLoopGuardState(config = {}) {
 
   function getFailure(input, now = Date.now()) {
     sweep(now);
-    const signature = createFailureSignature(input);
+    const signature = createFailureSignature({
+      ...input,
+      paramsPreviewMaxChars: cfg.paramsPreviewMaxChars
+    });
     const entry = entries.get(signature.key);
     return entry ? { ...entry } : undefined;
   }
@@ -172,20 +183,29 @@ export function createLoopGuardState(config = {}) {
   };
 }
 
-export function createFailureSignature({ toolName, params, args, result, error }) {
+export function createFailureSignature({
+  toolName,
+  params,
+  args,
+  result,
+  error,
+  paramsPreviewMaxChars = DEFAULT_CONFIG.paramsPreviewMaxChars
+}) {
   const normalizedParams = normalizeValue(params ?? args ?? {});
   const errorText = summarizeErrorText(error ?? extractResultText(result));
   const paramsHash = sha256(stableStringify(normalizedParams)).slice(0, 16);
   const errorHash = sha256(errorText).slice(0, 16);
   const normalizedToolName = String(toolName || "unknown");
   const callKey = createToolCallKey({ toolName: normalizedToolName, params: normalizedParams });
+  const paramsPreview = createParamsPreview(normalizedParams, paramsPreviewMaxChars);
   return {
     key: `${normalizedToolName}:${paramsHash}:${errorHash}`,
     callKey,
     toolName: normalizedToolName,
     paramsHash,
     errorHash,
-    errorSummary: errorText
+    errorSummary: errorText,
+    paramsPreview
   };
 }
 
@@ -281,8 +301,17 @@ export function createHandoffRequest({ trigger, entry, config, context = {} }) {
     `- errorHash: ${entry.errorHash}`,
     `- attempts in window: ${entry.count}`,
     `- error summary: ${entry.errorSummary}`,
+    entry.paramsPreview ? "- sanitized params preview:" : "",
+    entry.paramsPreview ? "```json" : "",
+    entry.paramsPreview || "",
+    entry.paramsPreview ? "```" : "",
     "",
-    "Take over the tool work. Do not repeat the exact same tool call that produced this signature. Use a different command, add timeouts, verify assumptions, ask for missing permission if needed, and report the concrete result or next action."
+    "Executor instructions:",
+    "- This background handoff has no interactive approval channel. Do not call tools in this run.",
+    "- Use the sanitized params preview and error summary as the evidence. Do not go hunting through unrelated repositories.",
+    "- Do not retry the original operation, even with a changed command. The parent agent already proved the failure.",
+    "- Return a concise handoff report with: likely cause, why repeating is unproductive, and the next safe action for the parent agent or human.",
+    "- If the next safe action needs live tool execution or permission, say so directly instead of attempting it."
   ].join("\n");
   return {
     sessionKey,
@@ -348,6 +377,36 @@ function summarizeErrorText(text) {
     .replace(/\s+/g, " ")
     .trim();
   return compact.slice(0, 500);
+}
+
+export function createParamsPreview(params, maxChars = DEFAULT_CONFIG.paramsPreviewMaxChars) {
+  const limit = nonNegativeInt(maxChars, DEFAULT_CONFIG.paramsPreviewMaxChars);
+  if (limit <= 0) return "";
+  const text = stableStringify(redactSensitiveValue(params));
+  return text.length > limit ? `${text.slice(0, limit)}... [truncated]` : text;
+}
+
+function redactSensitiveValue(value, key = "") {
+  if (Array.isArray(value)) return value.map((item) => redactSensitiveValue(item));
+  if (isObject(value)) {
+    const out = {};
+    for (const childKey of Object.keys(value).sort()) {
+      if (isSensitiveKey(childKey)) out[childKey] = "[redacted]";
+      else out[childKey] = redactSensitiveValue(value[childKey], childKey);
+    }
+    return out;
+  }
+  if (typeof value !== "string") return value;
+  if (isSensitiveKey(key)) return "[redacted]";
+  return value
+    .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/-]+=*/gi, "$1 [redacted]")
+    .replace(/\b(npm_[A-Za-z0-9_-]{12,})\b/g, "[redacted]")
+    .replace(/\b(gh[pousr]_[A-Za-z0-9_]{12,})\b/g, "[redacted]")
+    .replace(/\b(sk-[A-Za-z0-9_-]{12,})\b/g, "[redacted]");
+}
+
+function isSensitiveKey(key) {
+  return /(api[-_]?key|authorization|cookie|password|secret|token)/i.test(String(key || ""));
 }
 
 function normalizeValue(value) {

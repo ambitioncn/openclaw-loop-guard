@@ -60,6 +60,12 @@
         "type": "string",
         "default": "loop-guard"
       },
+      "paramsPreviewMaxChars": {
+        "type": "integer",
+        "minimum": 0,
+        "default": 1000,
+        "description": "Maximum length of the redacted tool-argument preview included in audit events and handoff prompts; 0 disables previews."
+      },
       "softThreshold": {
         "type": "integer",
         "minimum": 1,
