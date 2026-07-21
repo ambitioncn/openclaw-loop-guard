@@ -50,6 +50,11 @@ const agentFile = findOneContaining(/^agent-.*\.js$/, "agent gateway", "execAppr
 const attemptFile = findOneContaining(/^attempt-execution-.*\.js$/, "attempt execution", "function runAgentAttempt");
 const embeddedFile = findOneContaining(/^embedded-agent-.*\.js$/, "embedded agent", "async function runEmbeddedAgent");
 const runAttemptFile = findOneContaining(/^run-attempt-.*\.js$/, "Codex run attempt", "async function runCodexAppServerAttempt");
+const subagentAnnounceFile = findOneContaining(
+  /^subagent-announce-.*\.js$/,
+  "subagent announce delivery",
+  "Active requester session could not be woken for subagent completion"
+);
 
 const results = [];
 
@@ -233,6 +238,22 @@ function shouldAwaitCodexAgentEndHook(params) {`,
 \tpluginAppServer = appServer;`,
       already: `appServer = applyInheritedApprovalGrantToCodexAppServer(appServer, params.approvalGrant);
 \tpluginAppServer = appServer;`
+    }
+  ])
+);
+
+results.push(
+  patchText(subagentAnnounceFile, [
+    {
+      label: "downgrade expected no-active-run completion wake fallback",
+      needle: `\t\t\tactiveRequesterWakeFailed = true;
+\t\t\tdefaultRuntime.log(\`[warn] Active requester session could not be woken for subagent completion; falling back to requester-agent handoff: \${formatQueueWakeFailureError("active requester session could not be woken", wakeOutcome)}\`);
+\t\t}`,
+      replacement: `\t\t\tactiveRequesterWakeFailed = true;
+\t\t\tconst requesterWakeFallbackMessage = \`Active requester session could not be woken for subagent completion; falling back to requester-agent handoff: \${formatQueueWakeFailureError("active requester session could not be woken", wakeOutcome)}\`;
+\t\t\tdefaultRuntime.log(wakeOutcome.reason === "no_active_run" ? \`[subagent] \${requesterWakeFallbackMessage}\` : \`[warn] \${requesterWakeFallbackMessage}\`);
+\t\t}`,
+      already: `wakeOutcome.reason === "no_active_run" ? \`[subagent] \${requesterWakeFallbackMessage}\``
     }
   ])
 );
