@@ -54,7 +54,7 @@ Enable it explicitly in `openclaw.json` if your OpenClaw install requires plugin
           "enabled": true,
           "blockRepeatedCalls": false,
           "blockAfterPendingTimeout": true,
-          "pendingTimeoutMs": 60000,
+          "pendingTimeoutMs": 180000,
           "softThreshold": 2,
           "hardThreshold": 3,
           "windowMs": 600000,

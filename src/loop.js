@@ -6,7 +6,7 @@ const DEFAULT_CONFIG = {
   enabled: true,
   blockRepeatedCalls: false,
   blockAfterPendingTimeout: true,
-  pendingTimeoutMs: 60 * 1000,
+  pendingTimeoutMs: 180 * 1000,
   softThreshold: 2,
   hardThreshold: 3,
   windowMs: 10 * 60 * 1000,
