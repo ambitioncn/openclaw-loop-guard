@@ -452,6 +452,8 @@ export function createHandoffRequest({ trigger, entry, config, context = {} }) {
   ].join("\n");
   return {
     sessionKey,
+    requesterSessionKey: context.sessionKey || context.sessionId,
+    expectsCompletionMessage: true,
     idempotencyKey,
     message,
     toolsAllow: cfg.handoffToolsAllow,
@@ -672,6 +674,8 @@ export function createApprovedHandoffRequest({
   ].join("\n");
   return {
     sessionKey,
+    requesterSessionKey: event.sessionKey || event.sessionId,
+    expectsCompletionMessage: true,
     idempotencyKey,
     message,
     toolsAllow: allowedTools,

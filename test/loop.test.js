@@ -252,6 +252,8 @@ test("builds subagent handoff request from configured executor", () => {
   assert.equal(request.provider, "openai");
   assert.equal(request.model, "gpt-5.5");
   assert.match(request.sessionKey, /^agent:main:subagent:loop-guard-/);
+  assert.equal(request.requesterSessionKey, "agent:main:feishu:direct:user");
+  assert.equal(request.expectsCompletionMessage, true);
   assert.deepEqual(request.toolsAllow, []);
   assert.match(request.message, /Executor instructions/);
   assert.match(request.message, /toolsAllow=\[\]/);
@@ -494,6 +496,8 @@ test("builds approved handoff request for the same session with approved tools",
   assert.equal(request.sessionKey, "agent:main:subagent:loop-guard-source-a-b");
   assert.equal(request.provider, "openai");
   assert.equal(request.model, "gpt-5.5");
+  assert.equal(request.requesterSessionKey, "agent:main:feishu:direct:user");
+  assert.equal(request.expectsCompletionMessage, true);
   assert.deepEqual(request.toolsAllow, ["read", "exec", "bash", "apply_patch"]);
   assert.deepEqual(request.writeRoots, ["/repo"]);
   assert.equal(request.approvalGrant.kind, "loop_guard_inherited_approval");

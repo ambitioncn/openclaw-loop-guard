@@ -63,6 +63,16 @@ results.push(
 \t\t\t\t...params.approvalGrant && typeof params.approvalGrant === "object" && { approvalGrant: params.approvalGrant },
 \t\t\t\t...params.extraSystemPrompt && { extraSystemPrompt: params.extraSystemPrompt },`,
       already: `...params.approvalGrant && typeof params.approvalGrant === "object" && { approvalGrant: params.approvalGrant },`
+    },
+    {
+      label: "forward completion fields from plugin subagent runtime",
+      needle: `\t\t\t\t...params.extraSystemPrompt && { extraSystemPrompt: params.extraSystemPrompt },
+\t\t\t\t...params.lane && { lane: params.lane },`,
+      replacement: `\t\t\t\t...params.extraSystemPrompt && { extraSystemPrompt: params.extraSystemPrompt },
+\t\t\t\t...typeof params.requesterSessionKey === "string" && params.requesterSessionKey.trim() && { requesterSessionKey: params.requesterSessionKey.trim() },
+\t\t\t\t...typeof params.expectsCompletionMessage === "boolean" && { expectsCompletionMessage: params.expectsCompletionMessage },
+\t\t\t\t...params.lane && { lane: params.lane },`,
+      already: `...typeof params.requesterSessionKey === "string" && params.requesterSessionKey.trim() && { requesterSessionKey: params.requesterSessionKey.trim() },`
     }
   ])
 );
@@ -77,12 +87,54 @@ results.push(
 \tapprovalGrant: Type.Optional(Type.Unknown()),
 \tto: Type.Optional(Type.String()),`,
       already: `approvalGrant: Type.Optional(Type.Unknown()),`
+    },
+    {
+      label: "allow internal plugin subagent completion fields in agent params",
+      needle: `\tapprovalGrant: Type.Optional(Type.Unknown()),
+\tto: Type.Optional(Type.String()),`,
+      replacement: `\tapprovalGrant: Type.Optional(Type.Unknown()),
+\trequesterSessionKey: Type.Optional(Type.String()),
+\texpectsCompletionMessage: Type.Optional(Type.Boolean()),
+\tto: Type.Optional(Type.String()),`,
+      already: `requesterSessionKey: Type.Optional(Type.String()),`
     }
   ])
 );
 
 results.push(
   patchText(agentFile, [
+    {
+      label: "register plugin subagent requester session",
+      needle: `\tconst ownerSessionKey = resolveAgentMainSessionKey({
+\t\tcfg: params.cfg,
+\t\tagentId: resolveAgentIdFromSessionKey(childSessionKey)
+\t});
+\tconst { registerSubagentRun } = await import("`,
+      replacement: `\tconst ownerSessionKey = resolveAgentMainSessionKey({
+\t\tcfg: params.cfg,
+\t\tagentId: resolveAgentIdFromSessionKey(childSessionKey)
+\t});
+\tconst requesterSessionKey = normalizeOptionalString(params.requesterSessionKey) || ownerSessionKey;
+\tconst { registerSubagentRun } = await import("`,
+      already: `const requesterSessionKey = normalizeOptionalString(params.requesterSessionKey) || ownerSessionKey;`
+    },
+    {
+      label: "use requester session for plugin subagent completion owner",
+      needle: `\t\tcontrollerSessionKey: ownerSessionKey,
+\t\trequesterSessionKey: ownerSessionKey,`,
+      replacement: `\t\tcontrollerSessionKey: ownerSessionKey,
+\t\trequesterSessionKey,`,
+      already: `\t\tcontrollerSessionKey: ownerSessionKey,
+\t\trequesterSessionKey,`
+    },
+    {
+      label: "register plugin subagent completion expectation",
+      needle: `\t\texpectsCompletionMessage: false,
+\t\tspawnMode: "run"`,
+      replacement: `\t\texpectsCompletionMessage: params.expectsCompletionMessage === true,
+\t\tspawnMode: "run"`,
+      already: `expectsCompletionMessage: params.expectsCompletionMessage === true,`
+    },
     {
       label: "bind approvalGrant to plugin_subagent gateway runs",
       needle: `\t\t\t\t\tconst execApprovalFollowupElevatedDefaults = execApprovalFollowupRuntimeHandoff?.bashElevated;
@@ -100,6 +152,16 @@ results.push(
 \t\t\t\t\t\t\t...pluginSubagentApprovalGrant ? { approvalGrant: pluginSubagentApprovalGrant } : {},
 \t\t\t\t\t\t\tgroupId: resolvedGroupId,`,
       already: `...pluginSubagentApprovalGrant ? { approvalGrant: pluginSubagentApprovalGrant } : {},`
+    },
+    {
+      label: "forward plugin subagent completion fields into registry",
+      needle: `\t\t\t\t\tpluginId: normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId)
+\t\t\t\t});`,
+      replacement: `\t\t\t\t\tpluginId: normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId),
+\t\t\t\t\trequesterSessionKey: request.requesterSessionKey,
+\t\t\t\t\texpectsCompletionMessage: request.expectsCompletionMessage
+\t\t\t\t});`,
+      already: `requesterSessionKey: request.requesterSessionKey,`
     }
   ])
 );
@@ -123,10 +185,10 @@ results.push(
     {
       label: "forward approvalGrant into harness attempt params",
       needle: `\t\t\t\t\t\ttoolsAllow: params.toolsAllow,
-\t\t\t\t\t\tcleanupBundleMcpOnRunEnd: params.cleanupBundleMcpOnRunEnd,`,
+\t\t\t\t\t\tdisableMessageTool: params.disableMessageTool,`,
       replacement: `\t\t\t\t\t\ttoolsAllow: params.toolsAllow,
 \t\t\t\t\t\tapprovalGrant: params.approvalGrant,
-\t\t\t\t\t\tcleanupBundleMcpOnRunEnd: params.cleanupBundleMcpOnRunEnd,`,
+\t\t\t\t\t\tdisableMessageTool: params.disableMessageTool,`,
       already: `approvalGrant: params.approvalGrant,`
     }
   ])

@@ -27,6 +27,7 @@ The first implementation is deliberately small:
 - Automatic handoff is opt-in with `handoffEnabled`; when enabled, Loop Guard starts a plugin-owned subagent run using `executorModel` and records the handoff session/run ids.
 - Handoff prompts include a bounded, redacted preview of the failed tool arguments so the executor can work from the actual failed call instead of guessing from hashes.
 - Handoff passes `handoffToolsAllow` through to the plugin-owned subagent. The default is `[]`, so background handoffs run in no-tool diagnostic mode instead of relying only on prompt wording.
+- Handoff runs request completion delivery back to the source session, so executor results can be merged into the original conversation instead of only living in the background session.
 - When a handoff starts, Loop Guard adds a human-facing approval hint to the guarded tool result. It includes the exact `/loop-guard approve latest ...` command, executor session/run, approved tools, write roots, risky-operation status, and the 10 minute grant lifetime.
 - Approved handoff resume is available with `/loop-guard approve latest`. It reuses the last handoff session and sends an explicitly approved `toolsAllow` list, defaulting to `approvedHandoffToolsAllow`.
 - Approved handoff resume also includes scope rules: write roots, exec timeout requirements, and risky-operation patterns. A human approval is enough to authorize risky operations by default.
@@ -128,7 +129,7 @@ npm run check
 ## Current Limits
 
 - This MVP does not kill stuck sessions.
-- Handoff runs in a plugin-owned background subagent session; it does not yet merge the executor's result back into the active driver turn.
+- On OpenClaw 2026.6.11, plugin-owned subagent completion delivery needs the hot patch in `scripts/patch-openclaw-subagent-approval-grant.cjs`; unpatched core registers plugin subagents as background-only.
 - Handoff currently produces a diagnostic report by default because `handoffToolsAllow` defaults to `[]`. Set a narrow allow-list only when that executor run has been explicitly approved for tool execution.
 - Approved handoff resume sends explicit scope rules to the executor session, but OpenClaw 2026.6.11 does not yet enforce per-directory write roots or per-command policy at the tool runtime layer. Treat this as guarded delegation plus audit, not a kernel-level sandbox.
 - Argument previews are best-effort redacted and truncated; set `paramsPreviewMaxChars` to `0` for no params preview.
