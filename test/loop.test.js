@@ -38,6 +38,8 @@ test("normalizes config thresholds", () => {
   assert.deepEqual(normalizeConfig({ approvedHandoffWriteRoots: [" /repo ", "/repo", ""] }).approvedHandoffWriteRoots, [
     "/repo"
   ]);
+  assert.equal(normalizeConfig({}).approvedHandoffAllowRiskyOperations, true);
+  assert.equal(normalizeConfig({ approvedHandoffAllowRiskyOperations: false }).approvedHandoffAllowRiskyOperations, false);
   assert.equal(normalizeConfig({ approvedHandoffRequireExecTimeout: false }).approvedHandoffRequireExecTimeout, false);
   assert.equal(normalizeConfig({ paramsPreviewMaxChars: 120 }).paramsPreviewMaxChars, 120);
 });
@@ -301,13 +303,13 @@ test("parses approve command args with default and explicit tools", () => {
     selector: "latest",
     toolsAllow: ["read", "exec"],
     writeRoots: [],
-    confirmRisky: false
+    confirmRisky: true
   });
-  assert.deepEqual(parseApproveArgs("approve abc123 tools=read,apply_patch,read roots=/repo,/tmp confirm=risky", ["exec"]), {
+  assert.deepEqual(parseApproveArgs("approve abc123 tools=read,apply_patch,read roots=/repo,/tmp confirm=safe", ["exec"]), {
     selector: "abc123",
     toolsAllow: ["read", "apply_patch"],
     writeRoots: ["/repo", "/tmp"],
-    confirmRisky: true
+    confirmRisky: false
   });
 });
 
@@ -352,6 +354,7 @@ test("builds approved handoff request for the same session with approved tools",
   assert.match(request.message, /Approval received/i);
   assert.match(request.message, /Approved tools: read, exec, apply_patch/);
   assert.match(request.message, /Approved write roots: \/repo/);
+  assert.match(request.message, /Risky operations approved by this approval: yes/);
   assert.match(request.message, /Every exec command must be non-interactive and include an explicit timeout/);
   assert.match(request.message, /Writes are approved only under these roots: \/repo/);
   assert.match(request.message, /"cmd":"missing"/);
@@ -367,4 +370,14 @@ test("scope rules forbid writes and risky operations without explicit scope", ()
   assert.match(rules, /Every exec command/);
   assert.match(rules, /need separate approval/);
   assert.match(rules, /ssh, systemctl/);
+});
+
+test("approved handoff can allow risky operations by default", () => {
+  const rules = buildApprovedHandoffScopeRules({
+    allowedTools: ["exec"],
+    riskyPatterns: ["ssh", "systemctl"],
+    confirmRisky: true
+  }).join("\n");
+  assert.match(rules, /approved by this approval/);
+  assert.doesNotMatch(rules, /need separate approval/);
 });

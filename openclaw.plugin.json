@@ -88,6 +88,11 @@
         "default": [],
         "description": "Filesystem roots the approved handoff executor may write under. Empty means no writes are approved."
       },
+      "approvedHandoffAllowRiskyOperations": {
+        "type": "boolean",
+        "default": true,
+        "description": "When true, a human approve command is enough to authorize configured risky operation patterns for the approved handoff."
+      },
       "approvedHandoffRequireExecTimeout": {
         "type": "boolean",
         "default": true,

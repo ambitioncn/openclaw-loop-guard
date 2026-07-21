@@ -28,7 +28,7 @@ The first implementation is deliberately small:
 - Handoff prompts include a bounded, redacted preview of the failed tool arguments so the executor can work from the actual failed call instead of guessing from hashes.
 - Handoff passes `handoffToolsAllow` through to the plugin-owned subagent. The default is `[]`, so background handoffs run in no-tool diagnostic mode instead of relying only on prompt wording.
 - Approved handoff resume is available with `/loop-guard approve latest`. It reuses the last handoff session and sends an explicitly approved `toolsAllow` list, defaulting to `approvedHandoffToolsAllow`.
-- Approved handoff resume also includes scope rules: write roots, exec timeout requirements, and risky-operation patterns that require separate confirmation.
+- Approved handoff resume also includes scope rules: write roots, exec timeout requirements, and risky-operation patterns. A human approval is enough to authorize risky operations by default.
 
 Hard blocking is disabled by default while the plugin is being proven on real OpenClaw sessions.
 With the default config, repeated failures are still rewritten with model-visible guidance.
@@ -71,6 +71,7 @@ Enable it explicitly in `openclaw.json` if your OpenClaw install requires plugin
           "handoffToolsAllow": [],
           "approvedHandoffToolsAllow": ["read", "exec", "apply_patch"],
           "approvedHandoffWriteRoots": [],
+          "approvedHandoffAllowRiskyOperations": true,
           "approvedHandoffRequireExecTimeout": true,
           "approvedHandoffRiskyPatterns": ["ssh", "systemctl", "sudo", "rm", "git push", "npm publish", "secrets"],
           "paramsPreviewMaxChars": 1000,
@@ -103,12 +104,12 @@ If OpenClaw rejects the per-run model override despite that policy, Loop Guard f
 /loop-guard approve latest
 /loop-guard approve latest tools=read,exec,apply_patch
 /loop-guard approve latest tools=read,exec,apply_patch roots=/path/to/repo
-/loop-guard approve latest tools=read,exec roots=/path/to/repo confirm=risky
+/loop-guard approve latest tools=read,exec roots=/path/to/repo confirm=safe
 ```
 
 `approve` looks up the most recent `handoff-started` audit event and continues that same executor session with approved tools. A selector can replace `latest`; it matches the handoff session key, run id, source run id, tool name, params hash, or error hash.
 
-By default, write-capable tools are not enough to authorize writes. The approval must provide `roots=...` or config must set `approvedHandoffWriteRoots`. `exec` approvals tell the executor to use explicit timeouts/bounds. Risky patterns such as SSH, service restarts, deletes, pushes, publishing, and secret/auth changes are denied unless `confirm=risky` is included in the approval.
+By default, write-capable tools are not enough to authorize writes. The approval must provide `roots=...` or config must set `approvedHandoffWriteRoots`. `exec` approvals tell the executor to use explicit timeouts/bounds. Risky patterns such as SSH, service restarts, deletes, pushes, publishing, and secret/auth changes are allowed once the human approves the handoff. Use `confirm=safe` for a one-off approval that should still deny risky operations.
 
 ## Development
 

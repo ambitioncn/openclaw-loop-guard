@@ -17,6 +17,7 @@ const DEFAULT_CONFIG = {
   handoffToolsAllow: [],
   approvedHandoffToolsAllow: ["read", "exec", "apply_patch"],
   approvedHandoffWriteRoots: [],
+  approvedHandoffAllowRiskyOperations: true,
   approvedHandoffRequireExecTimeout: true,
   approvedHandoffRiskyPatterns: [
     "ssh",
@@ -85,6 +86,7 @@ export function normalizeConfig(input = {}) {
     cfg.approvedHandoffWriteRoots,
     DEFAULT_CONFIG.approvedHandoffWriteRoots
   );
+  cfg.approvedHandoffAllowRiskyOperations = cfg.approvedHandoffAllowRiskyOperations !== false;
   cfg.approvedHandoffRequireExecTimeout = cfg.approvedHandoffRequireExecTimeout !== false;
   cfg.approvedHandoffRiskyPatterns = normalizeStringList(
     cfg.approvedHandoffRiskyPatterns,
@@ -381,7 +383,7 @@ export function parseApproveArgs(args, defaultTools = DEFAULT_CONFIG.approvedHan
   let selector = "latest";
   const tools = [];
   const writeRoots = [];
-  let confirmRisky = false;
+  let confirmRisky = true;
   for (const token of tokens) {
     const toolsMatch = token.match(/^tools=(.*)$/i);
     if (toolsMatch) {
@@ -395,7 +397,7 @@ export function parseApproveArgs(args, defaultTools = DEFAULT_CONFIG.approvedHan
     }
     const confirmMatch = token.match(/^confirm=(.*)$/i);
     if (confirmMatch) {
-      confirmRisky = /^(risky|danger|all)$/i.test(confirmMatch[1]);
+      confirmRisky = !/^(safe|no|none|false)$/i.test(confirmMatch[1]);
       continue;
     }
     if (token.toLowerCase() === "latest") {
@@ -451,7 +453,7 @@ export function createApprovedHandoffRequest({
   config,
   toolsAllow,
   writeRoots,
-  confirmRisky = false,
+  confirmRisky = true,
   approvedAt = Date.now()
 }) {
   const cfg = normalizeConfig(config);
@@ -462,6 +464,7 @@ export function createApprovedHandoffRequest({
   const approvedWriteRoots = normalizeStringList(
     writeRoots && writeRoots.length > 0 ? writeRoots : cfg.approvedHandoffWriteRoots
   );
+  const riskyApproved = confirmRisky && cfg.approvedHandoffAllowRiskyOperations;
   if (!sessionKey) throw new Error("Missing handoff session key.");
   if (allowedTools.length === 0) throw new Error("Approval requires at least one allowed tool.");
   const scopeRules = buildApprovedHandoffScopeRules({
@@ -469,7 +472,7 @@ export function createApprovedHandoffRequest({
     writeRoots: approvedWriteRoots,
     requireExecTimeout: cfg.approvedHandoffRequireExecTimeout,
     riskyPatterns: cfg.approvedHandoffRiskyPatterns,
-    confirmRisky
+    confirmRisky: riskyApproved
   });
   const approvalId = new Date(approvedAt).toISOString().replace(/[:.]/g, "-");
   const idempotencyKey = `loop-guard:approve:${sessionKey}:${event.paramsHash || "params"}:${event.errorHash || "error"}:${approvalId}`;
@@ -478,7 +481,7 @@ export function createApprovedHandoffRequest({
     "",
     `Approved tools: ${allowedTools.join(", ")}`,
     `Approved write roots: ${approvedWriteRoots.length > 0 ? approvedWriteRoots.join(", ") : "none"}`,
-    `Risky operations pre-approved: ${confirmRisky ? "yes" : "no"}`,
+    `Risky operations approved by this approval: ${riskyApproved ? "yes" : "no"}`,
     `Executor model: ${modelRef || "session default"}`,
     `Original trigger: ${event.trigger || "unknown"}`,
     `Source agent: ${event.agentId || "unknown"}`,
@@ -506,7 +509,7 @@ export function createApprovedHandoffRequest({
     message,
     toolsAllow: allowedTools,
     writeRoots: approvedWriteRoots,
-    confirmRisky,
+    confirmRisky: riskyApproved,
     provider: model.provider,
     model: model.model
   };
@@ -545,7 +548,7 @@ export function buildApprovedHandoffScopeRules({
   if (risky.length > 0) {
     rules.push(
       confirmRisky
-        ? `- Risky operation patterns were explicitly confirmed for this approval: ${risky.join(", ")}. Still keep them minimal.`
+        ? `- Risky operation patterns are approved by this approval: ${risky.join(", ")}. Still keep them minimal.`
         : `- These risky operations need separate approval and must not be executed in this run: ${risky.join(", ")}.`
     );
   }
