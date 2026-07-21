@@ -1,11 +1,15 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import {
+  createApprovedHandoffRequest,
   createHandoffRequest,
   createGuardedToolResult,
   createLoopGuardState,
   createStateRecorder,
   defaultStatePath,
+  findHandoffEvent,
   normalizeConfig,
+  parseApproveArgs,
+  readRecentEvents,
   shouldBlockRepeatedCall,
   shouldStartHandoff,
   shouldTreatResultAsFailure,
@@ -305,13 +309,73 @@ export default definePluginEntry({
 
     api.registerCommand?.({
       name: "loop-guard",
-      description: "Inspect or reset Loop Guard state.",
+      description: "Inspect, reset, or approve Loop Guard handoffs.",
       acceptsArgs: true,
       handler: async (ctx) => {
-        const action = (ctx.args || "status").trim().toLowerCase();
+        const rawArgs = (ctx.args || "status").trim();
+        const action = rawArgs.split(/\s+/, 1)[0]?.toLowerCase() || "status";
         if (action === "reset" || action === "clear") {
           state.clear();
           return { text: "Loop Guard state cleared." };
+        }
+        if (action === "approve") {
+          const cfg = refreshConfig();
+          if (!api.runtime?.subagent?.run) {
+            return { text: "Loop Guard approval failed: subagent runtime is unavailable." };
+          }
+          const approval = parseApproveArgs(rawArgs, cfg.approvedHandoffToolsAllow);
+          const event = findHandoffEvent(
+            readRecentEvents(cfg.statePath || defaultStatePath()),
+            approval.selector
+          );
+          if (!event) {
+            return {
+              text: `Loop Guard approval failed: no matching handoff-started event found for ${approval.selector}.`
+            };
+          }
+          try {
+            const request = createApprovedHandoffRequest({
+              event,
+              config: cfg,
+              toolsAllow: approval.toolsAllow
+            });
+            const runParams = {
+              sessionKey: request.sessionKey,
+              message: request.message,
+              provider: request.provider,
+              model: request.model,
+              toolsAllow: request.toolsAllow,
+              lightContext: true,
+              deliver: false,
+              idempotencyKey: request.idempotencyKey
+            };
+            const result = await api.runtime.subagent.run(runParams);
+            recorder.record({
+              action: "handoff-approved-started",
+              handoffRunId: result?.runId,
+              handoffSessionKey: request.sessionKey,
+              executorModel: cfg.executorModel,
+              executorRuntime: cfg.executorRuntime,
+              approvedToolsAllow: request.toolsAllow,
+              approvedSelector: approval.selector,
+              sourceHandoffRunId: event.handoffRunId,
+              toolName: event.toolName,
+              paramsHash: event.paramsHash,
+              errorHash: event.errorHash
+            });
+            return {
+              text: `Loop Guard approved handoff: ${request.sessionKey} run=${result?.runId || "unknown"} tools=${request.toolsAllow.join(", ")}.`
+            };
+          } catch (error) {
+            const message = String(error?.message || error);
+            recorder.record({
+              action: "handoff-approved-failed",
+              approvedSelector: approval.selector,
+              handoffSessionKey: event.handoffSessionKey,
+              error: message
+            });
+            return { text: `Loop Guard approval failed: ${message}` };
+          }
         }
         const snapshot = state.snapshot();
         return {

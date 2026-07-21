@@ -68,6 +68,18 @@
         "default": [],
         "description": "Tool allow-list passed to the plugin-owned handoff subagent. Empty means no tools are exposed."
       },
+      "approvedHandoffToolsAllow": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "default": [
+          "read",
+          "exec",
+          "apply_patch"
+        ],
+        "description": "Default tool allow-list used when a human runs /loop-guard approve latest."
+      },
       "paramsPreviewMaxChars": {
         "type": "integer",
         "minimum": 0,

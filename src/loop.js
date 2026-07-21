@@ -15,6 +15,7 @@ const DEFAULT_CONFIG = {
   handoffOnBlock: true,
   handoffSessionPrefix: "loop-guard",
   handoffToolsAllow: [],
+  approvedHandoffToolsAllow: ["read", "exec", "apply_patch"],
   paramsPreviewMaxChars: 1000,
   softThreshold: 2,
   hardThreshold: 3,
@@ -55,9 +56,14 @@ export function normalizeConfig(input = {}) {
   cfg.handoffSessionPrefix = normalizeSessionSegment(
     cfg.handoffSessionPrefix || DEFAULT_CONFIG.handoffSessionPrefix
   );
-  cfg.handoffToolsAllow = Array.isArray(cfg.handoffToolsAllow)
-    ? cfg.handoffToolsAllow.map((tool) => String(tool).trim()).filter(Boolean)
-    : [...DEFAULT_CONFIG.handoffToolsAllow];
+  cfg.handoffToolsAllow = normalizeToolAllowList(
+    cfg.handoffToolsAllow,
+    DEFAULT_CONFIG.handoffToolsAllow
+  );
+  cfg.approvedHandoffToolsAllow = normalizeToolAllowList(
+    cfg.approvedHandoffToolsAllow,
+    DEFAULT_CONFIG.approvedHandoffToolsAllow
+  );
   cfg.paramsPreviewMaxChars = nonNegativeInt(
     cfg.paramsPreviewMaxChars,
     DEFAULT_CONFIG.paramsPreviewMaxChars
@@ -339,6 +345,116 @@ export function createHandoffRequest({ trigger, entry, config, context = {} }) {
   };
 }
 
+export function parseApproveArgs(args, defaultTools = DEFAULT_CONFIG.approvedHandoffToolsAllow) {
+  const tokens = String(args || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (tokens[0]?.toLowerCase() === "approve") tokens.shift();
+
+  let selector = "latest";
+  const tools = [];
+  for (const token of tokens) {
+    const toolsMatch = token.match(/^tools=(.*)$/i);
+    if (toolsMatch) {
+      tools.push(...toolsMatch[1].split(","));
+      continue;
+    }
+    if (token.toLowerCase() === "latest") {
+      selector = "latest";
+      continue;
+    }
+    selector = token;
+  }
+
+  return {
+    selector,
+    toolsAllow: normalizeToolAllowList(tools.length > 0 ? tools : defaultTools)
+  };
+}
+
+export function readRecentEvents(statePath, limit = 200) {
+  if (!statePath || !fs.existsSync(statePath)) return [];
+  const lines = fs.readFileSync(statePath, "utf8").trim().split(/\n+/).filter(Boolean);
+  return lines
+    .slice(-positiveInt(limit, 200))
+    .map((line) => {
+      try {
+        return JSON.parse(line);
+      } catch {
+        return undefined;
+      }
+    })
+    .filter(Boolean);
+}
+
+export function findHandoffEvent(events, selector = "latest") {
+  const normalizedSelector = String(selector || "latest").trim();
+  const candidates = [...events].reverse().filter((event) => event?.action === "handoff-started");
+  if (normalizedSelector === "latest") return candidates[0];
+  return candidates.find((event) => {
+    const fields = [
+      event.handoffSessionKey,
+      event.handoffRunId,
+      event.paramsHash,
+      event.errorHash,
+      event.toolName,
+      event.sessionKey,
+      event.runId
+    ];
+    return fields.some((field) => String(field || "").includes(normalizedSelector));
+  });
+}
+
+export function createApprovedHandoffRequest({ event, config, toolsAllow, approvedAt = Date.now() }) {
+  const cfg = normalizeConfig(config);
+  const modelRef = cfg.executorModel || event?.executorModel || "";
+  const model = splitModelRef(modelRef);
+  const sessionKey = event?.handoffSessionKey || "";
+  const allowedTools = normalizeToolAllowList(toolsAllow, cfg.approvedHandoffToolsAllow);
+  if (!sessionKey) throw new Error("Missing handoff session key.");
+  if (allowedTools.length === 0) throw new Error("Approval requires at least one allowed tool.");
+  const approvalId = new Date(approvedAt).toISOString().replace(/[:.]/g, "-");
+  const idempotencyKey = `loop-guard:approve:${sessionKey}:${event.paramsHash || "params"}:${event.errorHash || "error"}:${approvalId}`;
+  const message = [
+    "Loop Guard approval received. Continue the existing handoff session with explicitly approved tools.",
+    "",
+    `Approved tools: ${allowedTools.join(", ")}`,
+    `Executor model: ${modelRef || "session default"}`,
+    `Original trigger: ${event.trigger || "unknown"}`,
+    `Source agent: ${event.agentId || "unknown"}`,
+    `Source session: ${event.sessionKey || event.sessionId || "unknown"}`,
+    `Source run: ${event.runId || "unknown"}`,
+    "",
+    "Original failure signature:",
+    `- tool: ${event.toolName || "unknown"}`,
+    `- paramsHash: ${event.paramsHash || "unknown"}`,
+    `- errorHash: ${event.errorHash || "unknown"}`,
+    `- attempts in window: ${event.count || "unknown"}`,
+    `- error summary: ${event.errorSummary || ""}`,
+    event.paramsPreview ? "- sanitized params preview:" : "",
+    event.paramsPreview ? "```json" : "",
+    event.paramsPreview || "",
+    event.paramsPreview ? "```" : "",
+    "",
+    "Execution rules:",
+    "- Use only the approved tools listed above.",
+    "- Stay within the original failed task and its working directory/path evidence.",
+    "- Do not repeat the exact same failing call. Change strategy or inspect the minimum needed evidence.",
+    "- Keep writes narrowly scoped to the original task. Do not delete files, change secrets, install packages, restart services, or mutate remote hosts unless the original user approval explicitly covered that action.",
+    "- If another approval is needed, stop and say exactly what needs approval.",
+    "- Return a concise summary of actions taken, files changed, commands run, and remaining risk."
+  ].join("\n");
+  return {
+    sessionKey,
+    idempotencyKey,
+    message,
+    toolsAllow: allowedTools,
+    provider: model.provider,
+    model: model.model
+  };
+}
+
 export function shouldBlockRepeatedCall(entry, config, toolName = entry?.toolName) {
   if (!entry) return false;
   const cfg = normalizeConfig(config);
@@ -349,6 +465,19 @@ export function shouldBlockRepeatedCall(entry, config, toolName = entry?.toolNam
     ? Math.min(cfg.softThreshold, cfg.hardThreshold)
     : cfg.hardThreshold;
   return entry.count >= threshold;
+}
+
+export function normalizeToolAllowList(value, fallback = []) {
+  const source = Array.isArray(value) ? value : fallback;
+  const seen = new Set();
+  const out = [];
+  for (const item of source || []) {
+    const tool = String(item || "").trim();
+    if (!tool || seen.has(tool)) continue;
+    seen.add(tool);
+    out.push(tool);
+  }
+  return out;
 }
 
 export function createStateRecorder({ statePath, logger } = {}) {

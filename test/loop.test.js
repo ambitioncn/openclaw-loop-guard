@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  createApprovedHandoffRequest,
   createHandoffRequest,
   createFailureSignature,
   createGuardedToolResult,
   createLoopGuardState,
   createParamsPreview,
+  findHandoffEvent,
   normalizeConfig,
+  parseApproveArgs,
   shouldBlockRepeatedCall,
   shouldStartHandoff,
   shouldTreatResultAsFailure,
@@ -27,6 +30,9 @@ test("normalizes config thresholds", () => {
   assert.deepEqual(normalizeConfig({ handoffToolsAllow: [" read ", 1, ""] }).handoffToolsAllow, [
     "read",
     "1"
+  ]);
+  assert.deepEqual(normalizeConfig({ approvedHandoffToolsAllow: [" read ", "read", ""] }).approvedHandoffToolsAllow, [
+    "read"
   ]);
   assert.equal(normalizeConfig({ paramsPreviewMaxChars: 120 }).paramsPreviewMaxChars, 120);
 });
@@ -283,4 +289,56 @@ test("includes sanitized params preview in handoff request", () => {
   assert.match(request.message, /sanitized params preview/);
   assert.match(request.message, /definitely_missing_command/);
   assert.match(request.message, /"token":"\[redacted\]"/);
+});
+
+test("parses approve command args with default and explicit tools", () => {
+  assert.deepEqual(parseApproveArgs("approve latest", ["read", "exec"]), {
+    selector: "latest",
+    toolsAllow: ["read", "exec"]
+  });
+  assert.deepEqual(parseApproveArgs("approve abc123 tools=read,apply_patch,read", ["exec"]), {
+    selector: "abc123",
+    toolsAllow: ["read", "apply_patch"]
+  });
+});
+
+test("finds latest and selected handoff events", () => {
+  const events = [
+    { action: "observe", paramsHash: "first" },
+    { action: "handoff-started", handoffSessionKey: "agent:main:subagent:old", paramsHash: "aaa" },
+    { action: "handoff-started", handoffSessionKey: "agent:main:subagent:new", paramsHash: "bbb" }
+  ];
+  assert.equal(findHandoffEvent(events, "latest").paramsHash, "bbb");
+  assert.equal(findHandoffEvent(events, "old").paramsHash, "aaa");
+  assert.equal(findHandoffEvent(events, "missing"), undefined);
+});
+
+test("builds approved handoff request for the same session with approved tools", () => {
+  const request = createApprovedHandoffRequest({
+    event: {
+      action: "handoff-started",
+      handoffSessionKey: "agent:main:subagent:loop-guard-source-a-b",
+      executorModel: "openai/gpt-5.5",
+      trigger: "warn",
+      agentId: "main",
+      sessionKey: "agent:main:feishu:direct:user",
+      runId: "run-1",
+      toolName: "exec",
+      paramsHash: "a",
+      errorHash: "b",
+      count: 2,
+      errorSummary: "not found",
+      paramsPreview: "{\"cmd\":\"missing\"}"
+    },
+    config: { executorModel: "openai/gpt-5.5" },
+    toolsAllow: ["read", "exec"]
+  });
+  assert.equal(request.sessionKey, "agent:main:subagent:loop-guard-source-a-b");
+  assert.equal(request.provider, "openai");
+  assert.equal(request.model, "gpt-5.5");
+  assert.deepEqual(request.toolsAllow, ["read", "exec"]);
+  assert.match(request.idempotencyKey, /^loop-guard:approve:/);
+  assert.match(request.message, /Approval received/i);
+  assert.match(request.message, /Approved tools: read, exec/);
+  assert.match(request.message, /"cmd":"missing"/);
 });
