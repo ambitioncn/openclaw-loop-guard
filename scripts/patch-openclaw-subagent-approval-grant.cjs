@@ -2,9 +2,24 @@
 const fs = require("node:fs");
 const path = require("node:path");
 
-const dist =
-  process.argv[2] ||
-  path.join(process.env.HOME || process.cwd(), ".openclaw/npm/lib/node_modules/openclaw/dist");
+const args = process.argv.slice(2);
+const verifyOnly = args.includes("--verify");
+const help = args.includes("--help") || args.includes("-h");
+const distArg = args.find((arg) => !arg.startsWith("-"));
+const dist = distArg || path.join(process.env.HOME || process.cwd(), ".openclaw/npm/lib/node_modules/openclaw/dist");
+
+if (help) {
+  console.log(`Usage: node scripts/patch-openclaw-subagent-approval-grant.cjs [--verify] [dist-dir]
+
+Patches OpenClaw 2026.6.x dist files so Loop Guard plugin subagents can carry:
+- approvalGrant for per-run Codex approval policy
+- requesterSessionKey and expectsCompletionMessage for completion delivery
+- expected no_active_run wake fallback log downgrade
+- unique plugin completion labels
+
+Use --verify for a read-only check that all patch points are already applied.`);
+  process.exit(0);
+}
 
 function timestamp() {
   return new Date().toISOString().replace(/[-:]/g, "").replace(/\..+/, "");
@@ -13,11 +28,28 @@ function timestamp() {
 function patchText(file, patches) {
   let text = fs.readFileSync(file, "utf8");
   let changed = false;
+  const missing = [];
+  const pending = [];
   for (const patch of patches) {
     if (patch.already && text.includes(patch.already)) continue;
+    if (verifyOnly) {
+      if (text.includes(patch.needle)) pending.push(patch.label);
+      else missing.push(patch.label);
+      continue;
+    }
     if (!text.includes(patch.needle)) throw new Error(`expected patch target not found in ${file}: ${patch.label}`);
     text = text.replace(patch.needle, patch.replacement);
     changed = true;
+  }
+  if (verifyOnly) {
+    if (missing.length > 0 || pending.length > 0) {
+      const details = [
+        ...pending.map((label) => `not applied: ${label}`),
+        ...missing.map((label) => `target missing: ${label}`)
+      ].join("; ");
+      throw new Error(`verification failed for ${file}: ${details}`);
+    }
+    return { file, status: "verified" };
   }
   if (!changed) return { file, status: "already-patched" };
   const backup = `${file}.bak-loop-guard-approval-grant-${timestamp()}`;
@@ -43,6 +75,11 @@ function findOneContaining(pattern, label, needle) {
 }
 
 if (!fs.existsSync(dist)) throw new Error(`OpenClaw dist directory not found: ${dist}`);
+
+const packageJsonPath = path.join(dist, "..", "package.json");
+const openclawVersion = fs.existsSync(packageJsonPath)
+  ? JSON.parse(fs.readFileSync(packageJsonPath, "utf8")).version
+  : "unknown";
 
 const serverPluginsFile = findOne(/^server-plugins-.*\.js$/, "server plugins");
 const schemaFile = findOne(/^schema-.*\.js$/, "schema");
@@ -294,4 +331,4 @@ results.push(
   ])
 );
 
-console.log(JSON.stringify(results, null, 2));
+console.log(JSON.stringify({ mode: verifyOnly ? "verify" : "patch", dist, openclawVersion, results }, null, 2));

@@ -131,6 +131,17 @@ npm test
 npm run check
 ```
 
+## OpenClaw Core Hot Patch
+
+OpenClaw `2026.6.x` does not yet carry all plugin-subagent fields Loop Guard needs, so this repo includes a targeted dist patch:
+
+```bash
+node scripts/patch-openclaw-subagent-approval-grant.cjs
+node scripts/patch-openclaw-subagent-approval-grant.cjs --verify
+```
+
+The patch forwards `approvalGrant`, `requesterSessionKey`, and `expectsCompletionMessage`; applies active inherited approvals to Codex app-server runs; downgrades expected `no_active_run` completion wake fallback logging; and makes plugin completion labels unique. Restart the OpenClaw gateway after applying it.
+
 ## Verified Acceptance
 
 The Feishu slash-command completion path was verified on `nickv100` with OpenClaw `2026.6.11`:
