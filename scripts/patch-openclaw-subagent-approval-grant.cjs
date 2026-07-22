@@ -50,6 +50,11 @@ const agentFile = findOneContaining(/^agent-.*\.js$/, "agent gateway", "execAppr
 const attemptFile = findOneContaining(/^attempt-execution-.*\.js$/, "attempt execution", "function runAgentAttempt");
 const embeddedFile = findOneContaining(/^embedded-agent-.*\.js$/, "embedded agent", "async function runEmbeddedAgent");
 const runAttemptFile = findOneContaining(/^run-attempt-.*\.js$/, "Codex run attempt", "async function runCodexAppServerAttempt");
+const subagentAnnounceFlowFile = findOneContaining(
+  /^subagent-announce-.*\.js$/,
+  "subagent announce flow",
+  `method: "sessions.patch"`
+);
 const subagentAnnounceFile = findOneContaining(
   /^subagent-announce-.*\.js$/,
   "subagent announce delivery",
@@ -254,6 +259,37 @@ results.push(
 \t\t\tdefaultRuntime.log(wakeOutcome.reason === "no_active_run" ? \`[subagent] \${requesterWakeFallbackMessage}\` : \`[warn] \${requesterWakeFallbackMessage}\`);
 \t\t}`,
       already: `wakeOutcome.reason === "no_active_run" ? \`[subagent] \${requesterWakeFallbackMessage}\``
+    }
+  ])
+);
+
+results.push(
+  patchText(subagentAnnounceFlowFile, [
+    {
+      label: "make plugin completion labels unique",
+      needle: `\t\tif (params.label) try {
+\t\t\tawait subagentAnnounceDeps.callGateway({
+\t\t\t\tmethod: "sessions.patch",
+\t\t\t\tparams: {
+\t\t\t\t\tkey: params.childSessionKey,
+\t\t\t\t\tlabel: params.label
+\t\t\t\t},
+\t\t\t\ttimeoutMs: 1e4
+\t\t\t});
+\t\t} catch {}`,
+      replacement: `\t\tif (params.label) try {
+\t\t\tconst childLabelSuffix = normalizeOptionalString(params.childSessionKey)?.replace(/[^a-zA-Z0-9_-]+/g, "-").slice(-12);
+\t\t\tconst completionLabel = params.label.startsWith("plugin:") && childLabelSuffix ? \`\${params.label}:\${childLabelSuffix}\` : params.label;
+\t\t\tawait subagentAnnounceDeps.callGateway({
+\t\t\t\tmethod: "sessions.patch",
+\t\t\t\tparams: {
+\t\t\t\t\tkey: params.childSessionKey,
+\t\t\t\t\tlabel: completionLabel
+\t\t\t\t},
+\t\t\t\ttimeoutMs: 1e4
+\t\t\t});
+\t\t} catch {}`,
+      already: `const completionLabel = params.label.startsWith("plugin:") && childLabelSuffix ?`
     }
   ])
 );

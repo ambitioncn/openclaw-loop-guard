@@ -147,6 +147,7 @@ Observed acceptance signal:
 - The executor report confirmed `requesterSessionKey present: yes` and `expectsCompletionMessage present: yes`.
 - The completion report landed back in the original source session as a `delivery-mirror` assistant message.
 - The expected `no_active_run` wake fallback is logged as `[subagent]` instead of `[warn]`.
+- Plugin completion session labels are made unique by the hot patch, avoiding repeated `plugin:loop-guard` label collisions.
 
 ## Current Limits
 
@@ -156,9 +157,7 @@ Observed acceptance signal:
 - Approved handoff resume sends explicit scope rules to the executor session, but OpenClaw 2026.6.11 does not yet enforce per-directory write roots or per-command policy at the tool runtime layer. Treat this as guarded delegation plus audit, not a kernel-level sandbox.
 - Argument previews are best-effort redacted and truncated; set `paramsPreviewMaxChars` to `0` for no params preview.
 - On OpenClaw 2026.6.11, gateway-scoped plugin calls can still reject per-run subagent model overrides even when the plugin entry is allowlisted; Loop Guard records that policy rejection and uses default-model fallback instead.
-- OpenClaw may still log `sessions.patch ... label already in use: plugin:loop-guard` after completion announce. This is a separate label de-duplication issue and does not block completion delivery.
 
 ## Next Work
 
-- Upstream the hot-patched `approvalGrant`, `requesterSessionKey`, `expectsCompletionMessage`, and expected wake-fallback logging behavior into OpenClaw core.
-- Clean up the remaining `plugin:loop-guard` session label collision warning.
+- Upstream the hot-patched `approvalGrant`, `requesterSessionKey`, `expectsCompletionMessage`, expected wake-fallback logging behavior, and unique plugin completion labels into OpenClaw core.
