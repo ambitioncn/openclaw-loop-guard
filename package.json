@@ -1,6 +1,6 @@
 {
   "name": "openclaw-loop-guard",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "OpenClaw plugin that detects repeated tool failures and nudges or blocks agent loops.",
   "type": "module",
   "main": "./src/index.js",
@@ -18,6 +18,10 @@
     "compat": {
       "pluginApi": ">=2026.6.6",
       "minGatewayVersion": "2026.6.6"
+    },
+    "build": {
+      "openclawVersion": "2026.6.11",
+      "pluginSdkVersion": "2026.6.11"
     }
   },
   "scripts": {
