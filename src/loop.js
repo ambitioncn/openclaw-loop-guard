@@ -334,6 +334,13 @@ export function detectAgentTurnFailure(event = {}) {
       errorSummary: "agent turn ended as non_deliverable_terminal_turn"
     };
   }
+  if (/context overflow|prompt too large|context window|maximum context|context length|tokens.*exceed/.test(combined)) {
+    return {
+      kind: "context_overflow",
+      stopReason: stopReason || "unknown",
+      errorSummary: "agent turn hit model context window limit"
+    };
+  }
   if (event.success === false && /\blength\b|\boutput limit\b|\bmax_tokens\b|\bmax output\b/.test(combined)) {
     return {
       kind: "model_output_limit",

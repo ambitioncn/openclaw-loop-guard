@@ -10,7 +10,7 @@ It is intended for local-model deployments where a capable reasoning model is us
 - Rewrites repeated failure results with `agentToolResultMiddleware`.
 - Records high-risk tool calls that do not return before `pendingTimeoutMs`.
 - Optionally blocks unproductive repeat calls with `before_tool_call`.
-- Can observe model/session-level agent failures such as `stopReason=length` and hand them off to the configured executor.
+- Can observe model/session-level agent failures such as `stopReason=length` or context overflow and hand them off to the configured executor.
 - Stores lightweight audit events outside the session transcript.
 - Provides a `/loop-guard` command for status and reset.
 - Can start a configured executor subagent when repeated failures or hung calls indicate that the driver is stuck.
@@ -27,7 +27,7 @@ The first implementation is deliberately small:
 - A high-risk tool call that exceeds `pendingTimeoutMs` is treated as a stuck call; the same call is blocked on retry by default.
 - Model roles are configurable with `driverModel`, `executorModel`, and `executorRuntime`; the plugin never hard-codes Qwen, GPT, or Claude.
 - Automatic handoff is opt-in with `handoffEnabled`; when enabled, Loop Guard starts a plugin-owned subagent run using `executorModel` and records the handoff session/run ids.
-- Agent-level failure handoff is separately opt-in with `handoffOnAgentFailure`; it is useful when the driver hits output length or non-deliverable terminal turn failures instead of a normal tool failure.
+- Agent-level failure handoff is separately opt-in with `handoffOnAgentFailure`; it is useful when the driver hits output length, context overflow, or non-deliverable terminal turn failures instead of a normal tool failure.
 - Handoff prompts include a bounded, redacted preview of the failed tool arguments so the executor can work from the actual failed call instead of guessing from hashes.
 - Handoff passes `handoffToolsAllow` through to the plugin-owned subagent. The default is `[]`, so background handoffs run in no-tool diagnostic mode instead of relying only on prompt wording.
 - Handoff runs request completion delivery back to the source session, so executor results can be merged into the original conversation instead of only living in the background session.

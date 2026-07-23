@@ -80,6 +80,18 @@ test("detects model-level agent turn failures", () => {
     }
   );
 
+  assert.deepEqual(
+    detectAgentTurnFailure({
+      success: false,
+      error: "Context overflow: prompt too large for the model (precheck)."
+    }),
+    {
+      kind: "context_overflow",
+      stopReason: "unknown",
+      errorSummary: "agent turn hit model context window limit"
+    }
+  );
+
   assert.equal(detectAgentTurnFailure({ success: true, messages: [] }), undefined);
 });
 
