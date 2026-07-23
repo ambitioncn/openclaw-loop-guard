@@ -42,6 +42,12 @@ const DEFAULT_CONFIG = {
   windowMs: 10 * 60 * 1000,
   maxEntries: 500,
   highRiskTools: ["exec", "bash", "apply_patch", "write", "edit"],
+  noProgressDetectionEnabled: true,
+  noProgressSoftThreshold: 4,
+  noProgressHardThreshold: 6,
+  noProgressTools: ["exec", "bash", "process", "image"],
+  noProgressMessage:
+    "Loop Guard: this successful tool call is repeating without visible progress. Stop repeating the same action. State what changed, choose a different strategy, produce a concise result, or ask for human input.",
   softMessage:
     "Loop Guard: this tool call has failed repeatedly with the same error. Do not retry the same call. Choose a different strategy, change the command/arguments, ask for missing permission, or escalate to a more reliable executor.",
   hardMessage:
@@ -115,6 +121,20 @@ export function normalizeConfig(input = {}) {
   cfg.highRiskTools = Array.isArray(cfg.highRiskTools)
     ? cfg.highRiskTools.map(String).filter(Boolean)
     : [...DEFAULT_CONFIG.highRiskTools];
+  cfg.noProgressDetectionEnabled = cfg.noProgressDetectionEnabled !== false;
+  cfg.noProgressSoftThreshold = positiveInt(
+    cfg.noProgressSoftThreshold,
+    DEFAULT_CONFIG.noProgressSoftThreshold
+  );
+  cfg.noProgressHardThreshold = Math.max(
+    cfg.noProgressSoftThreshold,
+    positiveInt(cfg.noProgressHardThreshold, DEFAULT_CONFIG.noProgressHardThreshold)
+  );
+  cfg.noProgressTools = normalizeToolAllowList(
+    cfg.noProgressTools,
+    DEFAULT_CONFIG.noProgressTools
+  );
+  cfg.noProgressMessage = String(cfg.noProgressMessage || DEFAULT_CONFIG.noProgressMessage);
   cfg.softMessage = String(cfg.softMessage || DEFAULT_CONFIG.softMessage);
   cfg.hardMessage = String(cfg.hardMessage || DEFAULT_CONFIG.hardMessage);
   cfg.pendingMessage = String(cfg.pendingMessage || DEFAULT_CONFIG.pendingMessage);
@@ -189,6 +209,33 @@ export function createLoopGuardState(config = {}) {
     return { ...entry, pendingTimeout: true };
   }
 
+  function observeNoProgress(input, now = Date.now()) {
+    sweep(now);
+    const signature = createNoProgressSignature({
+      ...input,
+      paramsPreviewMaxChars: cfg.paramsPreviewMaxChars
+    });
+    const observationId = input.observationId ? `${signature.key}:${String(input.observationId)}` : "";
+    if (observationId && observationIds.has(observationId)) {
+      const existing = entries.get(signature.key);
+      return existing ? { ...existing } : { ...signature, count: 0, firstSeenAt: now, lastSeenAt: now };
+    }
+    const entry = entries.get(signature.key) ?? {
+      ...signature,
+      count: 0,
+      firstSeenAt: now,
+      lastSeenAt: now
+    };
+    entry.count += 1;
+    entry.lastSeenAt = now;
+    entries.set(signature.key, entry);
+    const callEntries = callIndex.get(signature.callKey) ?? new Set();
+    callEntries.add(signature.key);
+    callIndex.set(signature.callKey, callEntries);
+    if (observationId) observationIds.add(observationId);
+    return { ...entry };
+  }
+
   function getFailure(input, now = Date.now()) {
     sweep(now);
     const signature = createFailureSignature({
@@ -224,10 +271,36 @@ export function createLoopGuardState(config = {}) {
   return {
     observeFailure,
     observePendingTimeout,
+    observeNoProgress,
     getFailure,
     getMostRecentFailureForCall,
     clear,
     snapshot
+  };
+}
+
+export function createNoProgressSignature({
+  toolName,
+  params,
+  args,
+  paramsPreviewMaxChars = DEFAULT_CONFIG.paramsPreviewMaxChars
+}) {
+  const normalizedParams = normalizeValue(params ?? args ?? {});
+  const normalizedToolName = String(toolName || "unknown");
+  const paramsHash = sha256(stableStringify(normalizedParams)).slice(0, 16);
+  const errorSummary = "successful tool call repeated without visible progress";
+  const errorHash = sha256(errorSummary).slice(0, 16);
+  const callKey = createToolCallKey({ toolName: normalizedToolName, params: normalizedParams });
+  const paramsPreview = createParamsPreview(normalizedParams, paramsPreviewMaxChars);
+  return {
+    key: `${normalizedToolName}:${paramsHash}:${errorHash}`,
+    callKey,
+    toolName: normalizedToolName,
+    paramsHash,
+    errorHash,
+    errorSummary,
+    paramsPreview,
+    noProgress: true
   };
 }
 
@@ -316,6 +389,30 @@ export function createGuardedToolResult(originalResult, message, entry) {
       ...(isObject(originalResult?.details) ? originalResult.details : {}),
       loopGuard: {
         action: "warn",
+        count: entry.count,
+        toolName: entry.toolName,
+        paramsHash: entry.paramsHash,
+        errorHash: entry.errorHash
+      }
+    }
+  };
+}
+
+export function createNoProgressToolResult(originalResult, message, entry) {
+  const content = [
+    {
+      type: "text",
+      text: `${message}\n\nNo-progress signature: ${entry.toolName} params=${entry.paramsHash}. Previous successful repeats in window: ${entry.count}.`
+    }
+  ];
+  return {
+    ...(isObject(originalResult) ? originalResult : {}),
+    isError: true,
+    content,
+    details: {
+      ...(isObject(originalResult?.details) ? originalResult.details : {}),
+      loopGuard: {
+        action: "no-progress",
         count: entry.count,
         toolName: entry.toolName,
         paramsHash: entry.paramsHash,
@@ -462,6 +559,7 @@ export function shouldStartHandoff(trigger, entry, config) {
   if (!cfg.enabled || !cfg.handoffEnabled || !cfg.executorModel || !entry) return false;
   if (trigger === "block") return cfg.handoffOnBlock;
   if (trigger === "warn" || trigger === "warn-hard") return cfg.handoffOnSoftWarn;
+  if (trigger === "no-progress" || trigger === "no-progress-hard") return cfg.handoffOnSoftWarn;
   if (trigger === "pending-timeout") return cfg.handoffOnBlock;
   if (trigger === "agent-failure") return cfg.handoffOnAgentFailure;
   return false;

@@ -6,6 +6,7 @@ import {
   createHandoffRequest,
   createGuardedToolResult,
   createLoopGuardState,
+  createNoProgressToolResult,
   createSubagentRunParams,
   createStatusMessage,
   createStateRecorder,
@@ -311,7 +312,46 @@ export default definePluginEntry({
       async (event, ctx) => {
         const cfg = refreshConfig();
         if (!cfg.enabled) return;
-        if (!shouldTreatResultAsFailure(event)) return;
+        if (!shouldTreatResultAsFailure(event)) {
+          if (!cfg.noProgressDetectionEnabled) return;
+          const toolName = String(event.toolName || "");
+          if (!cfg.noProgressTools.includes(toolName)) return;
+          const entry = state.observeNoProgress({
+            toolName,
+            params: event.args,
+            observationId: event.toolCallId
+          });
+          if (entry.count < cfg.noProgressSoftThreshold) return;
+
+          const action = entry.count >= cfg.noProgressHardThreshold ? "no-progress-hard" : "no-progress";
+          recorder.record({
+            action,
+            runtime: ctx.runtime,
+            agentId: ctx.agentId,
+            sessionId: ctx.sessionId,
+            sessionKey: ctx.sessionKey,
+            runId: ctx.runId,
+            toolCallId: event.toolCallId,
+            ...entry
+          });
+          const handoffContext = createHandoffContext({
+            runtime: ctx.runtime,
+            agentId: ctx.agentId,
+            sessionId: ctx.sessionId,
+            sessionKey: ctx.sessionKey,
+            runId: ctx.runId,
+            toolCallId: event.toolCallId
+          }, entry, cfg);
+          const handoff = await maybeStartHandoff(action, entry, handoffContext);
+
+          return {
+            result: createNoProgressToolResult(
+              event.result,
+              `${withExecutorHint(cfg.noProgressMessage, cfg)}${handoff ? `\n\nLoop Guard started an executor handoff: ${handoff.sessionKey} run=${handoff.runId || "unknown"}${handoff.modelOverrideRejected ? " (executor model override rejected; default model fallback)" : ""}.\n\n${createApprovalPrompt({ handoff, config: cfg, entry })}` : ""}`,
+              entry
+            )
+          };
+        }
 
         const entry = state.observeFailure({
           toolName: event.toolName,

@@ -9,6 +9,8 @@ import {
   createFailureSignature,
   createGuardedToolResult,
   createLoopGuardState,
+  createNoProgressSignature,
+  createNoProgressToolResult,
   createParamsPreview,
   createStatusMessage,
   createSubagentRunParams,
@@ -54,6 +56,13 @@ test("normalizes config thresholds", () => {
   assert.equal(normalizeConfig({ approvedHandoffAllowRiskyOperations: false }).approvedHandoffAllowRiskyOperations, false);
   assert.equal(normalizeConfig({ approvedHandoffRequireExecTimeout: false }).approvedHandoffRequireExecTimeout, false);
   assert.equal(normalizeConfig({ paramsPreviewMaxChars: 120 }).paramsPreviewMaxChars, 120);
+  assert.equal(normalizeConfig({}).noProgressDetectionEnabled, true);
+  assert.equal(normalizeConfig({ noProgressDetectionEnabled: false }).noProgressDetectionEnabled, false);
+  assert.equal(normalizeConfig({ noProgressSoftThreshold: 5, noProgressHardThreshold: 3 }).noProgressHardThreshold, 5);
+  assert.deepEqual(normalizeConfig({ noProgressTools: [" exec ", "image", ""] }).noProgressTools, [
+    "exec",
+    "image"
+  ]);
 });
 
 test("detects model-level agent turn failures", () => {
@@ -149,6 +158,24 @@ test("tracks repeated failures inside a window", () => {
   assert.equal(second.count, 2);
 });
 
+test("tracks repeated successful calls as no-progress signals", () => {
+  const state = createLoopGuardState({ windowMs: 1000 });
+  const params = {
+    command:
+      "adb shell \"am start -a android.intent.action.VIEW -d 'exp://192.168.50.238:8081' host.exp.exponent\" && sleep 10 && adb shell screencap -p /sdcard/screen.png"
+  };
+  const first = state.observeNoProgress({ toolName: "exec", params }, 1000);
+  const second = state.observeNoProgress({ toolName: "exec", params }, 1100);
+
+  assert.equal(first.count, 1);
+  assert.equal(second.count, 2);
+  assert.equal(second.noProgress, true);
+  assert.equal(second.errorSummary, "successful tool call repeated without visible progress");
+
+  const signature = createNoProgressSignature({ toolName: "exec", params });
+  assert.equal(signature.key, first.key);
+});
+
 test("groups policy failures across changing params", () => {
   const state = createLoopGuardState({ windowMs: 1000 });
   const first = state.observeFailure({
@@ -228,6 +255,24 @@ test("wraps repeated failure results with model-visible guidance", () => {
   assert.equal(result.isError, true);
   assert.match(result.content[0].text, /change strategy/);
   assert.equal(result.details.loopGuard.count, 2);
+});
+
+test("wraps repeated successful calls with no-progress guidance", () => {
+  const result = createNoProgressToolResult(
+    { content: [{ type: "text", text: "Starting: Intent..." }] },
+    "stop repeating",
+    {
+      count: 4,
+      toolName: "exec",
+      paramsHash: "abc",
+      errorHash: "def"
+    }
+  );
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /stop repeating/);
+  assert.match(result.content[0].text, /No-progress signature/);
+  assert.equal(result.details.loopGuard.action, "no-progress");
+  assert.equal(result.details.loopGuard.count, 4);
 });
 
 test("does not hard-block repeated calls unless explicitly enabled", () => {
@@ -318,6 +363,13 @@ test("requires explicit handoff enablement and executor model", () => {
       handoffEnabled: true,
       executorModel: "openai/gpt-5.5",
       handoffOnAgentFailure: true
+    }),
+    true
+  );
+  assert.equal(
+    shouldStartHandoff("no-progress", entry, {
+      handoffEnabled: true,
+      executorModel: "openai/gpt-5.5"
     }),
     true
   );

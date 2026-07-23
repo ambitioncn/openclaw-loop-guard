@@ -11,6 +11,7 @@ It is intended for local-model deployments where a capable reasoning model is us
 - Records high-risk tool calls that do not return before `pendingTimeoutMs`.
 - Optionally blocks unproductive repeat calls with `before_tool_call`.
 - Groups known policy/path restriction failures across changing parameters.
+- Detects successful high-risk tool calls that repeat without visible progress and injects a model-visible stop/rethink warning.
 - Can observe model/session-level agent failures such as `stopReason=length` or context overflow and hand them off to the configured executor.
 - Stores lightweight audit events outside the session transcript.
 - Provides a `/loop-guard` command for status and reset.
@@ -26,6 +27,7 @@ The first implementation is deliberately small:
 - Third matching failure: can block the same call when `blockRepeatedCalls` is enabled.
 - High-risk tools can be blocked at the soft threshold when hard blocking is enabled.
 - A high-risk tool call that exceeds `pendingTimeoutMs` is treated as a stuck call; the same call is blocked on retry by default.
+- Successful high-risk tool calls can also be tracked as no-progress loops. By default, the fourth repeated success for the same normalized tool arguments is rewritten with guidance to stop repeating, produce a result, change strategy, or ask for human input.
 - Model roles are configurable with `driverModel`, `executorModel`, and `executorRuntime`; the plugin never hard-codes Qwen, GPT, or Claude.
 - Automatic handoff is opt-in with `handoffEnabled`; when enabled, Loop Guard starts a plugin-owned subagent run using `executorModel` and records the handoff session/run ids.
 - Agent-level failure handoff is separately opt-in with `handoffOnAgentFailure`; it is useful when the driver hits output length, context overflow, or non-deliverable terminal turn failures instead of a normal tool failure.
@@ -47,6 +49,8 @@ Failure identity is based on:
 - error/result summary hash
 
 Volatile ids such as `toolCallId`, `runId`, `turnId`, and timestamps are ignored.
+
+No-progress identity is based on tool name plus normalized arguments. It deliberately does not inspect private screenshots or large artifacts; it watches for the repeated action shape and warns the model once repeated successful calls stop producing a final answer or a new strategy.
 
 ## Install
 
@@ -86,6 +90,10 @@ Enable it explicitly in `openclaw.json` if your OpenClaw install requires plugin
           "paramsPreviewMaxChars": 1000,
           "softThreshold": 2,
           "hardThreshold": 3,
+          "noProgressDetectionEnabled": true,
+          "noProgressSoftThreshold": 4,
+          "noProgressHardThreshold": 6,
+          "noProgressTools": ["exec", "bash", "process", "image"],
           "windowMs": 600000,
           "highRiskTools": ["exec", "bash", "apply_patch", "write", "edit"]
         },
@@ -167,6 +175,7 @@ Observed acceptance signal:
 ## Current Limits
 
 - This MVP does not kill stuck sessions.
+- No-progress detection is conservative and model-visible: it warns or hands off, but does not forcibly terminate an active embedded run.
 - On OpenClaw 2026.6.11, plugin-owned subagent completion delivery needs the hot patch in `scripts/patch-openclaw-subagent-approval-grant.cjs`; unpatched core registers plugin subagents as background-only.
 - Handoff currently produces a diagnostic report by default because `handoffToolsAllow` defaults to `[]`. Set a narrow allow-list only when that executor run has been explicitly approved for tool execution.
 - Approved handoff resume sends explicit scope rules to the executor session, but OpenClaw 2026.6.11 does not yet enforce per-directory write roots or per-command policy at the tool runtime layer. Treat this as guarded delegation plus audit, not a kernel-level sandbox.

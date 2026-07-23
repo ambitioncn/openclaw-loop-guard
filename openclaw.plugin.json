@@ -148,6 +148,34 @@
         "minimum": 1,
         "default": 3
       },
+      "noProgressDetectionEnabled": {
+        "type": "boolean",
+        "default": true,
+        "description": "When true, repeated successful high-risk tool calls can be treated as a no-progress loop and rewritten with guidance."
+      },
+      "noProgressSoftThreshold": {
+        "type": "integer",
+        "minimum": 1,
+        "default": 4
+      },
+      "noProgressHardThreshold": {
+        "type": "integer",
+        "minimum": 1,
+        "default": 6
+      },
+      "noProgressTools": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "default": [
+          "exec",
+          "bash",
+          "process",
+          "image"
+        ],
+        "description": "Successful tool calls from these tools are tracked for repeated no-progress action shapes."
+      },
       "windowMs": {
         "type": "integer",
         "minimum": 1000,
@@ -181,6 +209,9 @@
         "type": "string"
       },
       "pendingMessage": {
+        "type": "string"
+      },
+      "noProgressMessage": {
         "type": "string"
       },
       "agentFailureMessage": {
