@@ -56,6 +56,11 @@
         "type": "boolean",
         "default": true
       },
+      "handoffOnAgentFailure": {
+        "type": "boolean",
+        "default": false,
+        "description": "When true, start a handoff when an agent turn ends with a model/session-level failure such as stopReason=length or non_deliverable_terminal_turn."
+      },
       "handoffSessionPrefix": {
         "type": "string",
         "default": "loop-guard"
@@ -176,6 +181,9 @@
         "type": "string"
       },
       "pendingMessage": {
+        "type": "string"
+      },
+      "agentFailureMessage": {
         "type": "string"
       }
     }

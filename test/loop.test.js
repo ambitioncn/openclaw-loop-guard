@@ -12,6 +12,7 @@ import {
   createParamsPreview,
   createStatusMessage,
   createSubagentRunParams,
+  detectAgentTurnFailure,
   findHandoffEvent,
   getHandoffLifecycle,
   normalizeApprovedToolAllowList,
@@ -45,11 +46,41 @@ test("normalizes config thresholds", () => {
     "/repo"
   ]);
   assert.equal(normalizeConfig({}).approvedHandoffAllowRiskyOperations, true);
+  assert.equal(normalizeConfig({ handoffOnAgentFailure: true }).handoffOnAgentFailure, true);
+  assert.equal(normalizeConfig({ handoffOnAgentFailure: "true" }).handoffOnAgentFailure, false);
   assert.equal(normalizeConfig({}).approvedHandoffMaxAgeMs, 1800000);
   assert.equal(normalizeConfig({ approvedHandoffMaxAgeMs: 0 }).approvedHandoffMaxAgeMs, 0);
   assert.equal(normalizeConfig({ approvedHandoffAllowRiskyOperations: false }).approvedHandoffAllowRiskyOperations, false);
   assert.equal(normalizeConfig({ approvedHandoffRequireExecTimeout: false }).approvedHandoffRequireExecTimeout, false);
   assert.equal(normalizeConfig({ paramsPreviewMaxChars: 120 }).paramsPreviewMaxChars, 120);
+});
+
+test("detects model-level agent turn failures", () => {
+  assert.deepEqual(
+    detectAgentTurnFailure({
+      success: false,
+      messages: [{ role: "assistant", stopReason: "length", content: [] }]
+    }),
+    {
+      kind: "model_output_length",
+      stopReason: "length",
+      errorSummary: "agent turn hit model output length limit"
+    }
+  );
+
+  assert.deepEqual(
+    detectAgentTurnFailure({
+      success: false,
+      error: "non_deliverable_terminal_turn"
+    }),
+    {
+      kind: "non_deliverable_terminal_turn",
+      stopReason: "unknown",
+      errorSummary: "agent turn ended as non_deliverable_terminal_turn"
+    }
+  );
+
+  assert.equal(detectAgentTurnFailure({ success: true, messages: [] }), undefined);
 });
 
 test("creates stable signatures without volatile ids", () => {
@@ -123,6 +154,25 @@ test("detects common textual failures", () => {
   assert.equal(
     shouldTreatResultAsFailure({
       result: { content: [{ type: "text", text: "Permission denied" }] }
+    }),
+    true
+  );
+  assert.equal(
+    shouldTreatResultAsFailure({
+      result: {
+        content: [
+          {
+            type: "text",
+            text: "grep: /home/nick/apps/cardvault-api/app/server.js: 没有那个文件或目录"
+          }
+        ]
+      }
+    }),
+    true
+  );
+  assert.equal(
+    shouldTreatResultAsFailure({
+      result: { content: [{ type: "text", text: "/bin/bash: foo: 未找到命令" }] }
     }),
     true
   );
@@ -220,6 +270,21 @@ test("requires explicit handoff enablement and executor model", () => {
       handoffOnSoftWarn: false
     }),
     false
+  );
+  assert.equal(
+    shouldStartHandoff("agent-failure", entry, {
+      handoffEnabled: true,
+      executorModel: "openai/gpt-5.5"
+    }),
+    false
+  );
+  assert.equal(
+    shouldStartHandoff("agent-failure", entry, {
+      handoffEnabled: true,
+      executorModel: "openai/gpt-5.5",
+      handoffOnAgentFailure: true
+    }),
+    true
   );
 });
 

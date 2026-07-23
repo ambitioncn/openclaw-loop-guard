@@ -13,6 +13,7 @@ const DEFAULT_CONFIG = {
   handoffEnabled: false,
   handoffOnSoftWarn: true,
   handoffOnBlock: true,
+  handoffOnAgentFailure: false,
   handoffSessionPrefix: "loop-guard",
   handoffToolsAllow: [],
   approvedHandoffToolsAllow: ["read", "exec", "bash", "apply_patch"],
@@ -46,7 +47,9 @@ const DEFAULT_CONFIG = {
   hardMessage:
     "Loop Guard blocked this tool call because it repeated the same known failure. Stop retrying this exact call and choose a different approach.",
   pendingMessage:
-    "Loop Guard blocked this tool call because the same call previously appeared to hang without returning. Use a timeout, change the command/arguments, check the tool runner, or use a different executor."
+    "Loop Guard blocked this tool call because the same call previously appeared to hang without returning. Use a timeout, change the command/arguments, check the tool runner, or use a different executor.",
+  agentFailureMessage:
+    "Loop Guard detected that the agent turn ended with a model/session-level failure. Do not ask the same driver to continue in the same shape; hand off to the configured executor or reduce the output into smaller chunks."
 };
 
 const VOLATILE_KEYS = new Set([
@@ -72,6 +75,7 @@ export function normalizeConfig(input = {}) {
   cfg.handoffEnabled = cfg.handoffEnabled === true;
   cfg.handoffOnSoftWarn = cfg.handoffOnSoftWarn !== false;
   cfg.handoffOnBlock = cfg.handoffOnBlock !== false;
+  cfg.handoffOnAgentFailure = cfg.handoffOnAgentFailure === true;
   cfg.handoffSessionPrefix = normalizeSessionSegment(
     cfg.handoffSessionPrefix || DEFAULT_CONFIG.handoffSessionPrefix
   );
@@ -114,6 +118,7 @@ export function normalizeConfig(input = {}) {
   cfg.softMessage = String(cfg.softMessage || DEFAULT_CONFIG.softMessage);
   cfg.hardMessage = String(cfg.hardMessage || DEFAULT_CONFIG.hardMessage);
   cfg.pendingMessage = String(cfg.pendingMessage || DEFAULT_CONFIG.pendingMessage);
+  cfg.agentFailureMessage = String(cfg.agentFailureMessage || DEFAULT_CONFIG.agentFailureMessage);
   return cfg;
 }
 
@@ -262,8 +267,13 @@ export function shouldTreatResultAsFailure({ isError, error, result }) {
   if (isError === true) return true;
   if (typeof error === "string" && error.trim()) return true;
   const text = extractResultText(result).toLowerCase();
-  return /\b(error|failed|failure|permission denied|denied|timeout|timed out|not found|exit code [1-9])\b/.test(
-    text
+  return (
+    /\b(error|failed|failure|permission denied|denied|timeout|timed out|not found|no such file or directory|command not found|exit code [1-9])\b/.test(
+      text
+    ) ||
+    /没有那个文件或目录|未找到命令|找不到命令|命令未找到|权限不够|权限被拒绝|连接超时|请求超时|执行失败/.test(
+      text
+    )
   );
 }
 
@@ -299,6 +309,39 @@ export function withExecutorHint(message, config) {
   if (cfg.executorModel) parts.push(`executor=${cfg.executorModel}`);
   if (cfg.executorRuntime) parts.push(`executorRuntime=${cfg.executorRuntime}`);
   return `${message}\n\nConfigured model roles: ${parts.join(", ")}. If the driver is stuck, hand tool execution to the configured executor instead of repeating the same call.`;
+}
+
+export function detectAgentTurnFailure(event = {}) {
+  const messages = Array.isArray(event.messages) ? event.messages : [];
+  const lastAssistant = [...messages].reverse().find((message) => {
+    return isObject(message) && message.role === "assistant";
+  });
+  const stopReason = String(lastAssistant?.stopReason || event.stopReason || "").trim();
+  const error = String(event.error || "").trim();
+  const combined = `${stopReason}\n${error}`.toLowerCase();
+
+  if (stopReason === "length" || /\bstopreason=length\b|\bstop_reason=length\b/.test(combined)) {
+    return {
+      kind: "model_output_length",
+      stopReason: "length",
+      errorSummary: "agent turn hit model output length limit"
+    };
+  }
+  if (/non_deliverable_terminal_turn|non-deliverable terminal turn/.test(combined)) {
+    return {
+      kind: "non_deliverable_terminal_turn",
+      stopReason: stopReason || "unknown",
+      errorSummary: "agent turn ended as non_deliverable_terminal_turn"
+    };
+  }
+  if (event.success === false && /\blength\b|\boutput limit\b|\bmax_tokens\b|\bmax output\b/.test(combined)) {
+    return {
+      kind: "model_output_limit",
+      stopReason: stopReason || "unknown",
+      errorSummary: "agent turn failed near a model output limit"
+    };
+  }
+  return undefined;
 }
 
 export function createApprovalPrompt({ handoff, config, entry }) {
@@ -389,6 +432,7 @@ export function shouldStartHandoff(trigger, entry, config) {
   if (trigger === "block") return cfg.handoffOnBlock;
   if (trigger === "warn" || trigger === "warn-hard") return cfg.handoffOnSoftWarn;
   if (trigger === "pending-timeout") return cfg.handoffOnBlock;
+  if (trigger === "agent-failure") return cfg.handoffOnAgentFailure;
   return false;
 }
 
@@ -426,7 +470,9 @@ export function createHandoffRequest({ trigger, entry, config, context = {} }) {
           "- Return the concrete result, the diff/commands used when applicable, and the next safe action."
         ];
   const message = [
-    "Loop Guard is handing off a stuck or repeated tool-execution problem.",
+    trigger === "agent-failure"
+      ? "Loop Guard is handing off a model/session-level agent failure."
+      : "Loop Guard is handing off a stuck or repeated tool-execution problem.",
     "",
     `Trigger: ${trigger}`,
     `Source agent: ${context.agentId || "unknown"}`,
@@ -448,8 +494,14 @@ export function createHandoffRequest({ trigger, entry, config, context = {} }) {
     entry.paramsPreview ? "```" : "",
     "",
     "Executor instructions:",
+    trigger === "agent-failure"
+      ? "- The driver turn failed before producing a deliverable result. Do not ask it to continue with the same large response shape."
+      : "",
+    trigger === "agent-failure"
+      ? "- Prefer a smaller, chunked execution plan. If a file must be written, write it in bounded chunks or use existing file-editing tools instead of generating a huge assistant message."
+      : "",
     ...toolMode
-  ].join("\n");
+  ].filter((line) => line !== "").join("\n");
   return {
     sessionKey,
     requesterSessionKey: context.sessionKey || context.sessionId,

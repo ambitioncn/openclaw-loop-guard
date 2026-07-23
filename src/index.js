@@ -10,6 +10,7 @@ import {
   createStatusMessage,
   createStateRecorder,
   defaultStatePath,
+  detectAgentTurnFailure,
   findHandoffEvent,
   normalizeConfig,
   parseApproveArgs,
@@ -48,6 +49,11 @@ function parseWaitMs(rawArgs) {
   if (unit === "m") return amount * 60 * 1000;
   if (unit === "s") return amount * 1000;
   return amount;
+}
+
+function isLoopGuardHandoffSession(ctx = {}) {
+  const sessionKey = String(ctx.sessionKey || ctx.sessionId || "");
+  return /:subagent:loop-guard(?:-|:|$)/.test(sessionKey);
 }
 
 export default definePluginEntry({
@@ -346,6 +352,51 @@ export default definePluginEntry({
         };
       },
       { runtimes: ["openclaw", "codex"] }
+    );
+
+    api.on(
+      "agent_end",
+      async (event, ctx) => {
+        const cfg = refreshConfig();
+        if (!cfg.enabled || !cfg.handoffOnAgentFailure) return;
+        if (isLoopGuardHandoffSession(ctx)) return;
+        const failure = detectAgentTurnFailure(event);
+        if (!failure) return;
+
+        const entry = state.observeFailure({
+          toolName: "agent_end",
+          params: {
+            failureKind: failure.kind,
+            stopReason: failure.stopReason,
+            provider: ctx.provider || event.provider || "",
+            model: ctx.model || event.model || ""
+          },
+          error: failure.errorSummary,
+          observationId: event.runId || ctx.runId
+        });
+
+        recorder.record({
+          action: "agent-failure",
+          runtime: "hook",
+          agentId: ctx.agentId,
+          sessionId: ctx.sessionId,
+          sessionKey: ctx.sessionKey,
+          runId: event.runId ?? ctx.runId,
+          failureKind: failure.kind,
+          stopReason: failure.stopReason,
+          eventError: event.error,
+          ...entry
+        });
+
+        await maybeStartHandoff("agent-failure", entry, {
+          runtime: "hook",
+          agentId: ctx.agentId,
+          sessionId: ctx.sessionId,
+          sessionKey: ctx.sessionKey,
+          runId: event.runId ?? ctx.runId
+        });
+      },
+      { priority: 80, timeoutMs: 5000 }
     );
 
     api.registerCommand?.({
