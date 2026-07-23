@@ -10,6 +10,7 @@ It is intended for local-model deployments where a capable reasoning model is us
 - Rewrites repeated failure results with `agentToolResultMiddleware`.
 - Records high-risk tool calls that do not return before `pendingTimeoutMs`.
 - Optionally blocks unproductive repeat calls with `before_tool_call`.
+- Groups known policy/path restriction failures across changing parameters.
 - Can observe model/session-level agent failures such as `stopReason=length` or context overflow and hand them off to the configured executor.
 - Stores lightweight audit events outside the session transcript.
 - Provides a `/loop-guard` command for status and reset.

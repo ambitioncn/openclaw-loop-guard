@@ -240,11 +240,17 @@ export function createFailureSignature({
   paramsPreviewMaxChars = DEFAULT_CONFIG.paramsPreviewMaxChars
 }) {
   const normalizedParams = normalizeValue(params ?? args ?? {});
-  const errorText = summarizeErrorText(error ?? extractResultText(result));
-  const paramsHash = sha256(stableStringify(normalizedParams)).slice(0, 16);
+  const rawErrorText = summarizeErrorText(error ?? extractResultText(result));
+  const policyFailure = normalizePolicyFailure(rawErrorText);
+  const errorText = policyFailure?.errorSummary ?? rawErrorText;
+  const paramsHash = policyFailure
+    ? sha256(`policy:${policyFailure.kind}`).slice(0, 16)
+    : sha256(stableStringify(normalizedParams)).slice(0, 16);
   const errorHash = sha256(errorText).slice(0, 16);
   const normalizedToolName = String(toolName || "unknown");
-  const callKey = createToolCallKey({ toolName: normalizedToolName, params: normalizedParams });
+  const callKey = policyFailure
+    ? `${normalizedToolName}:policy:${policyFailure.kind}`
+    : createToolCallKey({ toolName: normalizedToolName, params: normalizedParams });
   const paramsPreview = createParamsPreview(normalizedParams, paramsPreviewMaxChars);
   return {
     key: `${normalizedToolName}:${paramsHash}:${errorHash}`,
@@ -255,6 +261,24 @@ export function createFailureSignature({
     errorSummary: errorText,
     paramsPreview
   };
+}
+
+export function normalizePolicyFailure(errorText = "") {
+  const text = String(errorText || "");
+  const lower = text.toLowerCase();
+  if (lower.includes("memory flush writes are restricted")) {
+    return {
+      kind: "memory_flush_write_restricted",
+      errorSummary: "Memory flush writes are restricted to memory/YYYY-MM-DD.md; use that path only."
+    };
+  }
+  if (lower.includes("local media path is not under an allowed directory")) {
+    return {
+      kind: "media_path_not_allowed",
+      errorSummary: "Local media path is not under an allowed directory."
+    };
+  }
+  return undefined;
 }
 
 export function createToolCallKey({ toolName, params, args }) {

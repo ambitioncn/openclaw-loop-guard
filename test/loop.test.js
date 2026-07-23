@@ -15,6 +15,7 @@ import {
   detectAgentTurnFailure,
   findHandoffEvent,
   getHandoffLifecycle,
+  normalizePolicyFailure,
   normalizeApprovedToolAllowList,
   normalizeConfig,
   parseApproveArgs,
@@ -146,6 +147,28 @@ test("tracks repeated failures inside a window", () => {
   }, 1100);
   assert.equal(first.count, 1);
   assert.equal(second.count, 2);
+});
+
+test("groups policy failures across changing params", () => {
+  const state = createLoopGuardState({ windowMs: 1000 });
+  const first = state.observeFailure({
+    toolName: "write",
+    params: { path: "/tmp/a.js", content: "one" },
+    error: "Memory flush writes are restricted to memory/2026-07-23.md; use that path only."
+  }, 1000);
+  const second = state.observeFailure({
+    toolName: "write",
+    params: { path: "/tmp/b.js", content: "two" },
+    error: '{ "status": "error", "tool": "write", "error": "Memory flush writes are restricted to memory/2026-07-23.md; use that path only." }'
+  }, 1100);
+
+  assert.equal(first.key, second.key);
+  assert.equal(second.count, 2);
+  assert.equal(second.errorSummary, "Memory flush writes are restricted to memory/YYYY-MM-DD.md; use that path only.");
+  assert.deepEqual(normalizePolicyFailure("Local media path is not under an allowed directory: /tmp/x.png"), {
+    kind: "media_path_not_allowed",
+    errorSummary: "Local media path is not under an allowed directory."
+  });
 });
 
 test("looks up prior failures before a new call by tool and params", () => {
