@@ -1,6 +1,6 @@
 {
   "name": "openclaw-loop-guard",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "OpenClaw failover guard that detects local-model loops and terminal failures, then hands the original task to a cloud executor.",
   "type": "module",
   "main": "./src/index.js",
@@ -8,6 +8,13 @@
     ".": "./src/index.js",
     "./loop": "./src/loop.js"
   },
+  "files": [
+    "src/",
+    "scripts/",
+    "openclaw.plugin.json",
+    "README.md",
+    "LICENSE"
+  ],
   "openclaw": {
     "extensions": [
       "./src/index.js"
