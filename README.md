@@ -1,8 +1,8 @@
 # OpenClaw Loop Guard
 
-OpenClaw Loop Guard is a plugin that detects repeated tool failures and stops an agent from retrying the same failing action forever.
+OpenClaw Loop Guard is a failover plugin for local-model deployments. It detects repeated tool loops, circuit-breaker aborts, and terminal provider/model failures, then hands the original task and bounded recovery context to a configured cloud executor.
 
-It is intended for local-model deployments where a capable reasoning model is used as the front-stage brain, while risky tool execution can be guarded, redirected, or escalated.
+Its success condition is not merely “the loop stopped”: the cloud executor should resume the original user task with a different strategy and return a user-ready result to the source conversation.
 
 ## What It Does
 
@@ -12,7 +12,11 @@ It is intended for local-model deployments where a capable reasoning model is us
 - Optionally blocks unproductive repeat calls with `before_tool_call`.
 - Groups known policy/path restriction failures across changing parameters.
 - Detects successful high-risk tool calls that repeat without visible progress and injects a model-visible stop/rethink warning.
+- Normalizes empty paginated `read` calls so changing offsets cannot evade no-progress detection.
+- Recognizes OpenClaw's native loop circuit-breaker result and immediately creates a failover handoff.
 - Can observe model/session-level agent failures such as `stopReason=length` or context overflow and hand them off to the configured executor.
+- Can opt in to provider-level `model_call_ended` failure takeover when Loop Guard owns escalation instead of native model fallback.
+- Builds a bounded, redacted recovery packet from the source session: original task, recent context, completed progress, and failure evidence.
 - Stores lightweight audit events outside the session transcript.
 - Provides a `/loop-guard` command for status and reset.
 - Can start a configured executor subagent when repeated failures or hung calls indicate that the driver is stuck.
@@ -80,6 +84,7 @@ Enable it explicitly in `openclaw.json` if your OpenClaw install requires plugin
           "handoffOnSoftWarn": true,
           "handoffOnBlock": true,
           "handoffOnAgentFailure": false,
+          "handoffOnModelCallFailure": false,
           "handoffToolsAllow": [],
           "approvedHandoffToolsAllow": ["read", "exec", "bash", "apply_patch"],
           "approvedHandoffWriteRoots": [],
@@ -93,7 +98,7 @@ Enable it explicitly in `openclaw.json` if your OpenClaw install requires plugin
           "noProgressDetectionEnabled": true,
           "noProgressSoftThreshold": 4,
           "noProgressHardThreshold": 6,
-          "noProgressTools": ["exec", "bash", "process", "image"],
+          "noProgressTools": ["exec", "bash", "process", "image", "read"],
           "windowMs": 600000,
           "highRiskTools": ["exec", "bash", "apply_patch", "write", "edit"]
         },
@@ -143,16 +148,18 @@ npm test
 npm run check
 ```
 
-## OpenClaw Core Hot Patch
+## OpenClaw Core Hot Patches
 
-OpenClaw `2026.6.x` does not yet carry all plugin-subagent fields Loop Guard needs, so this repo includes a targeted dist patch:
+Some OpenClaw releases do not emit an awaited plugin failure hook on every terminal provider path and do not carry all plugin-subagent fields Loop Guard needs. This repo includes targeted, version/shape-guarded dist patches:
 
 ```bash
+node scripts/patch-openclaw-awaited-agent-end.cjs
+node scripts/patch-openclaw-awaited-agent-end.cjs --verify
 node scripts/patch-openclaw-subagent-approval-grant.cjs
 node scripts/patch-openclaw-subagent-approval-grant.cjs --verify
 ```
 
-The patch forwards `approvalGrant`, `requesterSessionKey`, and `expectsCompletionMessage`; applies active inherited approvals to Codex app-server runs; downgrades expected `no_active_run` completion wake fallback logging; and makes plugin completion labels unique. Restart the OpenClaw gateway after applying it.
+The awaited-agent-end patch emits the typed `agent_end` hook exactly once from the terminal provider-failure path. The approval patch forwards `approvalGrant`, `requesterSessionKey`, and `expectsCompletionMessage`; applies active inherited approvals to Codex app-server runs; downgrades expected `no_active_run` completion wake fallback logging; and makes plugin completion labels unique. Restart the OpenClaw gateway after applying a patch.
 
 ## Verified Acceptance
 
@@ -172,11 +179,21 @@ Observed acceptance signal:
 - The expected `no_active_run` wake fallback is logged as `[subagent]` instead of `[warn]`.
 - Plugin completion session labels are made unique by the hot patch, avoiding repeated `plugin:loop-guard` label collisions.
 
+## Verified Cloud Takeover
+
+On OpenClaw `2026.7.1-2`, a forced local-provider failure was verified end to end:
+
+- the terminal failure emitted one `agent-failure` event;
+- Loop Guard started exactly one handoff;
+- the handoff ran on `openai/gpt-5.5`;
+- the executor recovered the original arithmetic task and returned `TAKEOVER_OK 323`.
+
 ## Current Limits
 
-- This MVP does not kill stuck sessions.
-- No-progress detection is conservative and model-visible: it warns or hands off, but does not forcibly terminate an active embedded run.
-- On OpenClaw 2026.6.11, plugin-owned subagent completion delivery needs the hot patch in `scripts/patch-openclaw-subagent-approval-grant.cjs`; unpatched core registers plugin subagents as background-only.
+- Session quarantine and restart-recovery suppression are not included; Loop Guard relies on OpenClaw's native circuit breaker to stop the active loop.
+- Provider failures that occur before OpenClaw emits a plugin hook require the awaited-agent-end core patch on affected releases.
+- Do not enable `handoffOnModelCallFailure` while OpenClaw native model fallback also owns escalation, or two takeover paths may race.
+- Plugin-owned subagent completion delivery may need the approval-grant hot patch on affected OpenClaw releases.
 - Handoff currently produces a diagnostic report by default because `handoffToolsAllow` defaults to `[]`. Set a narrow allow-list only when that executor run has been explicitly approved for tool execution.
 - Approved handoff resume sends explicit scope rules to the executor session, but OpenClaw 2026.6.11 does not yet enforce per-directory write roots or per-command policy at the tool runtime layer. Treat this as guarded delegation plus audit, not a kernel-level sandbox.
 - Argument previews are best-effort redacted and truncated; set `paramsPreviewMaxChars` to `0` for no params preview.
@@ -184,4 +201,5 @@ Observed acceptance signal:
 
 ## Next Work
 
-- Upstream the hot-patched `approvalGrant`, `requesterSessionKey`, `expectsCompletionMessage`, expected wake-fallback logging behavior, and unique plugin completion labels into OpenClaw core.
+- Upstream the terminal-failure lifecycle and plugin-subagent hot patches into OpenClaw core.
+- Add session quarantine and restart-recovery suppression for repeatedly failing source sessions.
