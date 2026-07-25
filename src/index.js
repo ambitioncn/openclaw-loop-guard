@@ -1,6 +1,7 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import {
   createApprovedHandoffRequest,
+  createAgentFailureContext,
   createCompletionE2eRequest,
   createApprovalPrompt,
   createHandoffRequest,
@@ -10,12 +11,15 @@ import {
   createSubagentRunParams,
   createStatusMessage,
   createStateRecorder,
+  createToolCallKey,
   defaultStatePath,
   detectAgentTurnFailure,
   findHandoffEvent,
+  isCircuitBreakerResult,
   normalizeConfig,
   parseApproveArgs,
   readRecentEvents,
+  readRecentSessionContext,
   shouldBlockRepeatedCall,
   shouldStartHandoff,
   shouldTreatResultAsFailure,
@@ -65,6 +69,8 @@ export default definePluginEntry({
     let config = resolveRuntimeConfig(api);
     const state = createLoopGuardState(config);
     const pendingTimers = new Map();
+    const toolContexts = new Map();
+    const callContexts = new Map();
     const handoffKeys = new Set();
     const recorder = createStateRecorder({
       statePath: config.statePath || defaultStatePath(),
@@ -77,7 +83,17 @@ export default definePluginEntry({
     };
 
     const createHandoffContext = (base, entry, cfg) => {
-      if (base.sessionKey || base.sessionId) return base;
+      if (base.sessionKey || base.sessionId) {
+        return {
+          ...base,
+          recentContext:
+            base.recentContext ||
+            readRecentSessionContext({
+              agentId: base.agentId || "main",
+              sessionId: base.sessionId
+            })
+        };
+      }
       const related = readRecentEvents(cfg.statePath || defaultStatePath())
         .reverse()
         .find(
@@ -107,6 +123,18 @@ export default definePluginEntry({
 
     const trackPendingCall = (event, ctx, cfg) => {
       if (!event.toolCallId) return;
+      toolContexts.set(event.toolCallId, {
+        runtime: "hook",
+        agentId: ctx.agentId,
+        sessionId: ctx.sessionId,
+        sessionKey: ctx.sessionKey,
+        runId: event.runId ?? ctx.runId,
+        toolCallId: event.toolCallId
+      });
+      callContexts.set(
+        createToolCallKey({ toolName: event.toolName, params: event.params }),
+        toolContexts.get(event.toolCallId)
+      );
       if (cfg.pendingTimeoutMs <= 0) return;
       if (!cfg.highRiskTools.includes(String(event.toolName || ""))) return;
       clearPendingTimer(event.toolCallId);
@@ -232,6 +260,14 @@ export default definePluginEntry({
       "after_tool_call",
       async (event, ctx) => {
         clearPendingTimer(event.toolCallId);
+        if (event.toolCallId) {
+          const callKey = createToolCallKey({ toolName: event.toolName, params: event.params });
+          const cleanup = setTimeout(() => {
+            toolContexts.delete(event.toolCallId);
+            callContexts.delete(callKey);
+          }, 5000);
+          cleanup.unref?.();
+        }
         const cfg = refreshConfig();
         if (!cfg.enabled) return;
         if (!shouldTreatResultAsFailure(event)) return;
@@ -312,6 +348,38 @@ export default definePluginEntry({
       async (event, ctx) => {
         const cfg = refreshConfig();
         if (!cfg.enabled) return;
+        if (isCircuitBreakerResult(event.result)) {
+          const callKey = createToolCallKey({ toolName: event.toolName, params: event.args });
+          const sourceContext =
+            toolContexts.get(event.toolCallId) ||
+            callContexts.get(callKey) || {
+            runtime: ctx.runtime,
+            agentId: ctx.agentId,
+            sessionId: ctx.sessionId,
+            sessionKey: ctx.sessionKey,
+            runId: ctx.runId,
+            toolCallId: event.toolCallId
+          };
+          toolContexts.delete(event.toolCallId);
+          callContexts.delete(callKey);
+          const entry = state.observeFailure({
+            toolName: event.toolName,
+            params: event.args,
+            result: event.result,
+            observationId: event.toolCallId
+          });
+          recorder.record({
+            action: "circuit-breaker",
+            ...sourceContext,
+            ...entry
+          });
+          await maybeStartHandoff(
+            "circuit-breaker",
+            entry,
+            createHandoffContext(sourceContext, entry, cfg)
+          );
+          return;
+        }
         if (!shouldTreatResultAsFailure(event)) {
           if (!cfg.noProgressDetectionEnabled) return;
           const toolName = String(event.toolName || "");
@@ -319,6 +387,7 @@ export default definePluginEntry({
           const entry = state.observeNoProgress({
             toolName,
             params: event.args,
+            result: event.result,
             observationId: event.toolCallId
           });
           if (entry.count < cfg.noProgressSoftThreshold) return;
@@ -395,13 +464,72 @@ export default definePluginEntry({
     );
 
     api.on(
+      "model_call_ended",
+      async (event, ctx) => {
+        const cfg = refreshConfig();
+        if (!cfg.enabled || !cfg.handoffOnModelCallFailure || event.outcome !== "error") return;
+        if (isLoopGuardHandoffSession({ sessionKey: event.sessionKey, sessionId: event.sessionId })) {
+          return;
+        }
+
+        const entry = state.observeFailure({
+          toolName: "model_call",
+          params: {
+            provider: event.provider || "",
+            model: event.model || "",
+            errorCategory: event.errorCategory || "",
+            failureKind: event.failureKind || ""
+          },
+          error: `model call failed before task completion (${event.errorCategory || event.failureKind || "unknown"})`,
+          observationId: event.callId
+        });
+        const context = {
+          runtime: "hook",
+          agentId: ctx.agentId,
+          sessionId: event.sessionId || ctx.sessionId,
+          sessionKey: event.sessionKey || ctx.sessionKey,
+          runId: event.runId || ctx.runId
+        };
+        recorder.record({
+          action: "model-call-failure",
+          ...context,
+          callId: event.callId,
+          provider: event.provider,
+          model: event.model,
+          errorCategory: event.errorCategory,
+          failureKind: event.failureKind,
+          ...entry
+        });
+        await maybeStartHandoff(
+          "model-call-failure",
+          entry,
+          createHandoffContext(context, entry, cfg)
+        );
+      },
+      { priority: 80, timeoutMs: 5000 }
+    );
+
+    api.on(
       "agent_end",
       async (event, ctx) => {
         const cfg = refreshConfig();
         if (!cfg.enabled || !cfg.handoffOnAgentFailure) return;
         if (isLoopGuardHandoffSession(ctx)) return;
         const failure = detectAgentTurnFailure(event);
-        if (!failure) return;
+        if (!failure) {
+          if (event.success === false) {
+            recorder.record({
+              action: "agent-failure-unclassified",
+              runtime: "hook",
+              agentId: ctx.agentId,
+              sessionId: ctx.sessionId,
+              sessionKey: ctx.sessionKey,
+              runId: event.runId ?? ctx.runId,
+              eventError: String(event.error || "").slice(0, 1000)
+            });
+          }
+          return;
+        }
 
         const entry = state.observeFailure({
           toolName: "agent_end",
@@ -409,7 +537,8 @@ export default definePluginEntry({
             failureKind: failure.kind,
             stopReason: failure.stopReason,
             provider: ctx.provider || event.provider || "",
-            model: ctx.model || event.model || ""
+            model: ctx.model || event.model || "",
+            recentContext: createAgentFailureContext(event)
           },
           error: failure.errorSummary,
           observationId: event.runId || ctx.runId

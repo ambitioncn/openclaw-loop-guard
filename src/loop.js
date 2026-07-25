@@ -14,6 +14,7 @@ const DEFAULT_CONFIG = {
   handoffOnSoftWarn: true,
   handoffOnBlock: true,
   handoffOnAgentFailure: false,
+  handoffOnModelCallFailure: false,
   handoffSessionPrefix: "loop-guard",
   handoffToolsAllow: [],
   approvedHandoffToolsAllow: ["read", "exec", "bash", "apply_patch"],
@@ -82,6 +83,7 @@ export function normalizeConfig(input = {}) {
   cfg.handoffOnSoftWarn = cfg.handoffOnSoftWarn !== false;
   cfg.handoffOnBlock = cfg.handoffOnBlock !== false;
   cfg.handoffOnAgentFailure = cfg.handoffOnAgentFailure === true;
+  cfg.handoffOnModelCallFailure = cfg.handoffOnModelCallFailure === true;
   cfg.handoffSessionPrefix = normalizeSessionSegment(
     cfg.handoffSessionPrefix || DEFAULT_CONFIG.handoffSessionPrefix
   );
@@ -283,10 +285,15 @@ export function createNoProgressSignature({
   toolName,
   params,
   args,
+  result,
   paramsPreviewMaxChars = DEFAULT_CONFIG.paramsPreviewMaxChars
 }) {
-  const normalizedParams = normalizeValue(params ?? args ?? {});
   const normalizedToolName = String(toolName || "unknown");
+  const normalizedParams = normalizeNoProgressParams({
+    toolName: normalizedToolName,
+    params: params ?? args ?? {},
+    result
+  });
   const paramsHash = sha256(stableStringify(normalizedParams)).slice(0, 16);
   const errorSummary = "successful tool call repeated without visible progress";
   const errorHash = sha256(errorSummary).slice(0, 16);
@@ -302,6 +309,23 @@ export function createNoProgressSignature({
     paramsPreview,
     noProgress: true
   };
+}
+
+export function normalizeNoProgressParams({ toolName, params, result }) {
+  const normalizedToolName = String(toolName || "unknown");
+  const normalizedParams = normalizeValue(params ?? {});
+  if (
+    normalizedToolName === "read" &&
+    isObject(normalizedParams) &&
+    typeof normalizedParams.path === "string" &&
+    extractResultText(result).trim() === ""
+  ) {
+    return {
+      path: normalizedParams.path,
+      emptyResult: true
+    };
+  }
+  return normalizedParams;
 }
 
 export function createFailureSignature({
@@ -374,6 +398,15 @@ export function shouldTreatResultAsFailure({ isError, error, result }) {
   );
 }
 
+export function isCircuitBreakerResult(result) {
+  const text = extractResultText(result).toLowerCase();
+  return (
+    text.includes("session execution blocked to prevent runaway loops") ||
+    text.includes("global circuit breaker triggered") ||
+    text.includes("compaction_loop_persisted")
+  );
+}
+
 export function createGuardedToolResult(originalResult, message, entry) {
   const content = [
     {
@@ -441,6 +474,28 @@ export function detectAgentTurnFailure(event = {}) {
   const error = String(event.error || "").trim();
   const combined = `${stopReason}\n${error}`.toLowerCase();
 
+  if (
+    /compaction_loop_persisted|tool[-_ ]loop|loop detection|loop_detected|global circuit breaker/.test(
+      combined
+    )
+  ) {
+    return {
+      kind: "tool_loop_circuit_breaker",
+      stopReason: stopReason || "unknown",
+      errorSummary: "agent run was aborted by tool-loop circuit breaker"
+    };
+  }
+  if (
+    /provider rejected the request schema|tool payload|automatic parser generation failed|json schema conversion failed/.test(
+      combined
+    )
+  ) {
+    return {
+      kind: "local_model_tool_schema",
+      stopReason: stopReason || "unknown",
+      errorSummary: "local model could not accept the tool schema or tool payload"
+    };
+  }
   if (stopReason === "length" || /\bstopreason=length\b|\bstop_reason=length\b/.test(combined)) {
     return {
       kind: "model_output_length",
@@ -469,7 +524,74 @@ export function detectAgentTurnFailure(event = {}) {
       errorSummary: "agent turn failed near a model output limit"
     };
   }
+  if (
+    event.success === false &&
+    /llm request failed|network connection error|connection error|provider error|upstream error|model call failed/.test(
+      combined
+    )
+  ) {
+    return {
+      kind: "provider_terminal_failure",
+      stopReason: stopReason || "unknown",
+      errorSummary: "agent turn ended after a terminal model provider failure"
+    };
+  }
   return undefined;
+}
+
+export function createAgentFailureContext(event = {}, options = {}) {
+  const maxMessages = positiveInt(options.maxMessages, 12);
+  const maxChars = positiveInt(options.maxChars, 6000);
+  const messages = Array.isArray(event.messages) ? event.messages.slice(-maxMessages) : [];
+  const lines = messages
+    .map((message) => {
+      if (!isObject(message)) return "";
+      const role = String(message.role || "unknown");
+      const name = String(message.name || message.toolName || "").trim();
+      const label = name ? `${role}(${name})` : role;
+      const text = extractResultText(message);
+      return text ? `${label}: ${redactSensitiveValue(text)}` : "";
+    })
+    .filter(Boolean);
+  const joined = lines.join("\n");
+  if (joined.length <= maxChars) return joined;
+  return `${joined.slice(0, maxChars)}…[truncated]`;
+}
+
+export function readRecentSessionContext({
+  home = process.env.HOME || process.cwd(),
+  agentId = "main",
+  sessionId,
+  maxBytes = 128 * 1024
+} = {}) {
+  const safeAgentId = normalizeSessionSegment(agentId);
+  const safeSessionId = String(sessionId || "").replace(/[^a-zA-Z0-9_-]/g, "");
+  if (!safeSessionId) return "";
+  const sessionPath = path.join(
+    home,
+    ".openclaw",
+    "agents",
+    safeAgentId,
+    "sessions",
+    `${safeSessionId}.jsonl`
+  );
+  if (!fs.existsSync(sessionPath)) return "";
+  const data = fs.readFileSync(sessionPath);
+  const tail = data.subarray(Math.max(0, data.length - positiveInt(maxBytes, 128 * 1024))).toString(
+    "utf8"
+  );
+  const messages = tail
+    .split(/\n+/)
+    .map((line) => {
+      try {
+        const row = JSON.parse(line);
+        return row?.type === "message" && isObject(row.message) ? row.message : undefined;
+      } catch {
+        return undefined;
+      }
+    })
+    .filter(Boolean);
+  return createAgentFailureContext({ messages });
 }
 
 export function createApprovalPrompt({ handoff, config, entry }) {
@@ -562,6 +684,8 @@ export function shouldStartHandoff(trigger, entry, config) {
   if (trigger === "no-progress" || trigger === "no-progress-hard") return cfg.handoffOnSoftWarn;
   if (trigger === "pending-timeout") return cfg.handoffOnBlock;
   if (trigger === "agent-failure") return cfg.handoffOnAgentFailure;
+  if (trigger === "circuit-breaker") return cfg.handoffOnAgentFailure;
+  if (trigger === "model-call-failure") return cfg.handoffOnModelCallFailure;
   return false;
 }
 
@@ -599,9 +723,10 @@ export function createHandoffRequest({ trigger, entry, config, context = {} }) {
           "- Return the concrete result, the diff/commands used when applicable, and the next safe action."
         ];
   const message = [
-    trigger === "agent-failure"
+    trigger === "agent-failure" || trigger === "model-call-failure"
       ? "Loop Guard is handing off a model/session-level agent failure."
       : "Loop Guard is handing off a stuck or repeated tool-execution problem.",
+    "Primary objective: complete the original user's task. A diagnosis-only report is not success when the task can still be completed safely.",
     "",
     `Trigger: ${trigger}`,
     `Source agent: ${context.agentId || "unknown"}`,
@@ -623,13 +748,28 @@ export function createHandoffRequest({ trigger, entry, config, context = {} }) {
     entry.paramsPreview ? "```" : "",
     "",
     "Executor instructions:",
+    "- Reconstruct the original user request from the source context before acting.",
+    "- Preserve work already completed by the driver. Do not restart the task from zero.",
+    "- Treat the failure signature as evidence of a failed strategy, not as the task itself.",
+    "- Use a different, bounded strategy and stop if completion requires new human authority.",
+    "- Return a user-ready final result to the source conversation, including what was completed and any genuine blocker.",
+    trigger === "circuit-breaker"
+      ? "- The source run has already been stopped by OpenClaw's circuit breaker. Do not resume its loop."
+      : "",
+    trigger === "circuit-breaker"
+      ? "- Use the source session context below to recover the original user request and completed work, then finish the original user task with a different bounded strategy."
+      : "",
     trigger === "agent-failure"
       ? "- The driver turn failed before producing a deliverable result. Do not ask it to continue with the same large response shape."
       : "",
     trigger === "agent-failure"
       ? "- Prefer a smaller, chunked execution plan. If a file must be written, write it in bounded chunks or use existing file-editing tools instead of generating a huge assistant message."
       : "",
-    ...toolMode
+    ...toolMode,
+    context.recentContext ? "Failover recovery packet (bounded and redacted):" : "",
+    context.recentContext ? "<<<SOURCE_CONTEXT" : "",
+    context.recentContext ? context.recentContext : "",
+    context.recentContext ? "SOURCE_CONTEXT>>>" : ""
   ].filter((line) => line !== "").join("\n");
   return {
     sessionKey,

@@ -61,6 +61,11 @@
         "default": false,
         "description": "When true, start a handoff when an agent turn ends with a model/session-level failure such as stopReason=length or non_deliverable_terminal_turn."
       },
+      "handoffOnModelCallFailure": {
+        "type": "boolean",
+        "default": false,
+        "description": "Opt-in takeover for a failed provider model call. Enable only when Loop Guard, rather than OpenClaw native model fallbacks, owns escalation."
+      },
       "handoffSessionPrefix": {
         "type": "string",
         "default": "loop-guard"

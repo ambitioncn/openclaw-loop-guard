@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import {
   buildApprovedHandoffScopeRules,
@@ -14,13 +17,17 @@ import {
   createParamsPreview,
   createStatusMessage,
   createSubagentRunParams,
+  createAgentFailureContext,
   detectAgentTurnFailure,
   findHandoffEvent,
   getHandoffLifecycle,
+  isCircuitBreakerResult,
+  normalizeNoProgressParams,
   normalizePolicyFailure,
   normalizeApprovedToolAllowList,
   normalizeConfig,
   parseApproveArgs,
+  readRecentSessionContext,
   shouldBlockRepeatedCall,
   shouldStartHandoff,
   shouldTreatResultAsFailure,
@@ -102,7 +109,101 @@ test("detects model-level agent turn failures", () => {
     }
   );
 
+  assert.deepEqual(
+    detectAgentTurnFailure({
+      success: false,
+      error: "Tool loop detected: global circuit breaker triggered"
+    }),
+    {
+      kind: "tool_loop_circuit_breaker",
+      stopReason: "unknown",
+      errorSummary: "agent run was aborted by tool-loop circuit breaker"
+    }
+  );
+
+  assert.deepEqual(
+    detectAgentTurnFailure({
+      success: false,
+      error: "compaction_loop_persisted"
+    }),
+    {
+      kind: "tool_loop_circuit_breaker",
+      stopReason: "unknown",
+      errorSummary: "agent run was aborted by tool-loop circuit breaker"
+    }
+  );
+
+  assert.deepEqual(
+    detectAgentTurnFailure({
+      success: false,
+      error:
+        "LLM request failed: provider rejected the request schema or tool payload. " +
+        "Automatic parser generation failed: JSON schema conversion failed"
+    }),
+    {
+      kind: "local_model_tool_schema",
+      stopReason: "unknown",
+      errorSummary: "local model could not accept the tool schema or tool payload"
+    }
+  );
+
+  assert.deepEqual(
+    detectAgentTurnFailure({
+      success: false,
+      error: "LLM request failed: network connection error."
+    }),
+    {
+      kind: "provider_terminal_failure",
+      stopReason: "unknown",
+      errorSummary: "agent turn ended after a terminal model provider failure"
+    }
+  );
+
   assert.equal(detectAgentTurnFailure({ success: true, messages: [] }), undefined);
+});
+
+test("builds a bounded recent context for cloud failover", () => {
+  const context = createAgentFailureContext({
+    messages: [
+      { role: "user", content: [{ type: "text", text: "Fix the APK install loop" }] },
+      { role: "assistant", content: [{ type: "text", text: "I will inspect the logs." }] },
+      {
+        role: "tool",
+        name: "exec",
+        content: [{ type: "text", text: "Authorization: Bearer sk-secret1234567890" }]
+      }
+    ]
+  });
+  assert.match(context, /user: Fix the APK install loop/);
+  assert.match(context, /assistant: I will inspect the logs/);
+  assert.match(context, /tool\(exec\): Authorization: Bearer \[redacted\]/);
+  assert.doesNotMatch(context, /sk-secret1234567890/);
+});
+
+test("reads a bounded source session tail for cloud failover", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "loop-guard-session-"));
+  const sessionDir = path.join(home, ".openclaw", "agents", "main", "sessions");
+  fs.mkdirSync(sessionDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(sessionDir, "session-1.jsonl"),
+    [
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: [{ type: "text", text: "Finish the build" }] }
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: [{ type: "text", text: "Running tests" }] }
+      })
+    ].join("\n")
+  );
+  const context = readRecentSessionContext({
+    home,
+    agentId: "main",
+    sessionId: "session-1"
+  });
+  assert.match(context, /user: Finish the build/);
+  assert.match(context, /assistant: Running tests/);
 });
 
 test("creates stable signatures without volatile ids", () => {
@@ -240,6 +341,57 @@ test("detects common textual failures", () => {
   );
 });
 
+test("detects OpenClaw critical loop breaker results", () => {
+  assert.equal(
+    isCircuitBreakerResult({
+      content: [
+        {
+          type: "text",
+          text:
+            "CRITICAL: Called exec with identical arguments and identical outcomes 10 times. " +
+            "Session execution blocked to prevent runaway loops."
+        }
+      ]
+    }),
+    true
+  );
+  assert.equal(
+    isCircuitBreakerResult({
+      content: [{ type: "text", text: "Loop warning: exec called 6 times" }]
+    }),
+    false
+  );
+});
+
+test("groups empty read pagination as no-progress on the same file", () => {
+  const first = createNoProgressSignature({
+    toolName: "read",
+    params: { path: "/tmp/apk-verify.txt", limit: 10, offset: 1600 },
+    result: { content: [{ type: "text", text: "" }] }
+  });
+  const second = createNoProgressSignature({
+    toolName: "read",
+    params: { path: "/tmp/apk-verify.txt", limit: 10, offset: 1605 },
+    result: { content: [{ type: "text", text: "" }] }
+  });
+  const contentful = createNoProgressSignature({
+    toolName: "read",
+    params: { path: "/tmp/apk-verify.txt", limit: 10, offset: 1605 },
+    result: { content: [{ type: "text", text: "line" }] }
+  });
+
+  assert.equal(first.paramsHash, second.paramsHash);
+  assert.notEqual(first.paramsHash, contentful.paramsHash);
+  assert.deepEqual(
+    normalizeNoProgressParams({
+      toolName: "read",
+      params: { path: "/tmp/apk-verify.txt", limit: 10, offset: 1600 },
+      result: { content: [{ type: "text", text: "" }] }
+    }),
+    { path: "/tmp/apk-verify.txt", emptyResult: true }
+  );
+});
+
 test("wraps repeated failure results with model-visible guidance", () => {
   const result = createGuardedToolResult(
     { content: [{ type: "text", text: "Permission denied" }] },
@@ -367,6 +519,22 @@ test("requires explicit handoff enablement and executor model", () => {
     true
   );
   assert.equal(
+    shouldStartHandoff("circuit-breaker", entry, {
+      handoffEnabled: true,
+      executorModel: "openai/gpt-5.5",
+      handoffOnAgentFailure: true
+    }),
+    true
+  );
+  assert.equal(
+    shouldStartHandoff("model-call-failure", entry, {
+      handoffEnabled: true,
+      executorModel: "openai/gpt-5.5",
+      handoffOnModelCallFailure: true
+    }),
+    true
+  );
+  assert.equal(
     shouldStartHandoff("no-progress", entry, {
       handoffEnabled: true,
       executorModel: "openai/gpt-5.5"
@@ -488,6 +656,39 @@ test("builds handoff prompt for explicitly allowed tools", () => {
   assert.deepEqual(request.toolsAllow, ["read", "apply_patch"]);
   assert.match(request.message, /only these tools: read, apply_patch/);
   assert.match(request.message, /pre-approved/);
+});
+
+test("circuit-breaker handoff tells executor to recover the parent task", () => {
+  const request = createHandoffRequest({
+    trigger: "circuit-breaker",
+    entry: {
+      key: "exec:a:b",
+      count: 10,
+      toolName: "exec",
+      paramsHash: "a",
+      errorHash: "b",
+      errorSummary: "Session execution blocked to prevent runaway loops"
+    },
+    config: {
+      handoffEnabled: true,
+      executorModel: "openai/gpt-5.5",
+      handoffToolsAllow: ["read", "exec"]
+    },
+    context: {
+      agentId: "main",
+      sessionKey: "agent:main:feishu:direct:user",
+      recentContext: [
+        "user: Build the requested artifact",
+        "assistant: Completed setup and started verification",
+        "tool(exec): Session execution blocked to prevent runaway loops"
+      ].join("\n")
+    }
+  });
+  assert.match(request.message, /primary objective: complete the original user's task/i);
+  assert.match(request.message, /failover recovery packet/i);
+  assert.match(request.message, /preserve work already completed/i);
+  assert.match(request.message, /Build the requested artifact/);
+  assert.match(request.message, /finish the original user task/i);
 });
 
 test("builds a human approval prompt for executor handoff", () => {
